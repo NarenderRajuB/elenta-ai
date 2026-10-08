@@ -8,7 +8,7 @@ The guide to the service (REQ-100). The repository [README](../README.md) is the
 |---|---|---|
 | [Overview](overview.md) | Purpose, supported use, scope, known limits | REQ-101 |
 | [Architecture](architecture.md) | Components, boundaries, storage, model connection, diagram | REQ-102 |
-| Request and data flow *(to be written)* | Corpus refresh and chat flow, with diagrams | REQ-103 |
+| [Request and data flow](request-flow.md) | Corpus refresh and chat flow, with diagrams; following one request | REQ-103 |
 | Setup *(to be written)* | Prerequisites, model pull, configuration, startup, health check, first request | REQ-104 |
 | Configuration *(to be written)* | Every environment variable and its effect | REQ-105 |
 | Operations *(to be written)* | Logs and traces, corpus refresh, restart and recovery, formats, platform notes | REQ-106 |

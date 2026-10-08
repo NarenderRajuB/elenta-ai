@@ -1,6 +1,6 @@
 # Architecture
 
-How the system is put together: the components, the boundaries inside the app, where state lives and how the app reaches the model (REQ-102). The decisions behind each part are in [architecture-decisions.md](architecture-decisions.md); the step-by-step request path is in the request and data flow document (to be written, REQ-103).
+How the system is put together: the components, the boundaries inside the app, where state lives and how the app reaches the model (REQ-102). The decisions behind each part are in [architecture-decisions.md](architecture-decisions.md); the step-by-step request path is in [Request and data flow](request-flow.md).
 
 ## System diagram
 

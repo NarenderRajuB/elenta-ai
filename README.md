@@ -11,13 +11,14 @@ A small, local, containerised chat service that answers questions from a live do
 | [docs/README.md](docs/README.md) | **Start here:** index of the guide |
 | [docs/overview.md](docs/overview.md) | Purpose, supported use, scope, known limits |
 | [docs/architecture.md](docs/architecture.md) | Components, boundaries, storage, model connection, system diagram |
+| [docs/request-flow.md](docs/request-flow.md) | Corpus refresh and chat flow with diagrams; following one request |
 | [docs/spec.md](docs/spec.md) | Structured summary of the brief, interpretations, open questions |
 | [docs/requirements.md](docs/requirements.md) | Requirements register (REQ-001 … REQ-141), each traced to a brief section (`§` = section of the brief) |
 | [docs/acceptance-criteria.md](docs/acceptance-criteria.md) | Live review scenarios and per-requirement acceptance criteria |
 | [docs/architecture-decisions.md](docs/architecture-decisions.md) | Decision log (ADRs) |
 | [docs/troubleshooting-log.md](docs/troubleshooting-log.md) | Issues and dead ends, in the order they occurred |
 
-The rest of the guide (request and data flow, setup, configuration, operations, security, failure handling) is being added under `docs/`; see [docs/README.md](docs/README.md) for its current state.
+The rest of the guide (setup, configuration, operations, security, failure handling) is being added under `docs/`; see [docs/README.md](docs/README.md) for its current state.
 
 ## Current architecture decisions
 

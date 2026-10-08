@@ -4,7 +4,7 @@ Decision log required by brief §5.11 (REQ-110, REQ-112). Entries are appended *
 
 **Statuses**: `Proposed` (drafted, awaiting candidate acceptance) · `Accepted` · `Superseded` · `Rejected`.
 
-> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-002, ADR-004, ADR-005, ADR-006, ADR-007, ADR-008, ADR-010, ADR-011, ADR-012, ADR-013 (model superseded), ADR-014, ADR-015, ADR-016. Rejected: ADR-003.
+> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-002, ADR-004, ADR-005, ADR-006, ADR-007, ADR-008, ADR-009, ADR-010, ADR-011, ADR-012, ADR-013 (model superseded), ADR-014, ADR-015, ADR-016. Rejected: ADR-003.
 
 Template:
 
@@ -267,7 +267,7 @@ Template:
 
 ## ADR-009: Conflict handling — no automatic precedence; surface conflicts with named sources
 
-- **Status:** Proposed · **Date:** 2026-10-08
+- **Status:** Accepted by the candidate on 2026-10-08 · **Date:** 2026-10-08
 - **Requirements:** REQ-054, REQ-074
 
 **Context.** "When current documents conflict and no defensible precedence rule resolves the conflict, surface the conflict and identify the competing sources" (§5.5). File mtime is not a defensible indicator of truth.
@@ -455,6 +455,8 @@ Template:
 
 **Consequences if accepted.** Update `.env.example` and README; `/readyz` will then require `gemma3:1b` to be pulled; re-run `scripts/eval_injection.py` after any prompt change. If rejected, `qwen2.5:0.5b` stays and its invention risk is documented.
 
+
+**Re-evaluation (2026-10-08, TS-008).** After `gemma3:1b` failed to surface conflicting documents, the candidate asked to revisit the model. With a conflict case added and both checks corrected: `gemma3:1b` 15/18, `qwen2.5:0.5b` 15/18, `qwen3:0.6b` (751.63M) 12/18; it affirmed the injected approval 3/3. None surfaced the conflict. **Decision unchanged: `gemma3:1b`.**
 ---
 
 ## ADR-017: No Streamlit UI (alternative considered and dropped)

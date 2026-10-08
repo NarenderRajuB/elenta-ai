@@ -264,4 +264,28 @@ INFO httpx HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1
 1. `scripts/verify.sh` runs every check with `env -u REQUESTS_CA_BUNDLE`, so the scans work without changing the user's profile.
 2. The Dockerfile runtime stage upgrades only `liblzma5` (targeted, not `apt-get upgrade`, so builds stay predictable) and uninstalls `pip`.
 
-**Remaining limitation.** After these changes the Trivy gate (fixable HIGH/CRITICAL) passes. The full report still lists 164 Debian base-image findings (HIGH 44, MEDIUM 58, LOW 61, UNKNOWN 1, CRITICAL 0) with no fix available yet. They are accepted and kept visible in `docs/evidence/verify/trivy-image-report.txt`; re-running `scripts/verify.sh` after a base-image update picks up new fixes. The Python packages in the image have 0 findings; pip-audit reports no known vulnerabilities.
+**Remaining limitation.** After these changes the Trivy gate (fixable HIGH/CRITICAL) passes. The full report still lists 164 Debian base-image findings (HIGH 44, MEDIUM 58, LOW 61, UNKNOWN 1, CRITICAL 0) with no fix available yet. They are accepted and kept visible in `docs/evidence/verify/trivy-app-report.txt` (named `trivy-image-report.txt` before TS-010); re-running `scripts/verify.sh` after a base-image update picks up new fixes. The Python packages in the image have 0 findings; pip-audit reports no known vulnerabilities.
+
+---
+
+## TS-010: Jaeger image not scanned; 2.11.0 had fixable critical findings
+
+- **Date:** 2026-10-08
+- **Phase:** Security checks (ADR-018), follow-up
+- **Related:** REQ-122, ADR-008, ADR-018
+
+**Symptom.** `scripts/verify.sh` scanned only the app image. A manual Trivy 0.75.0 scan of the second Compose image, `jaegertracing/jaeger:2.11.0`, failed the gate: 73 HIGH/CRITICAL findings with a fix available (210 findings in total).
+
+**Diagnosis.** Two sources, both fixed only by a newer Jaeger release:
+1. Alpine 3.22.1 packages: OpenSSL `libssl3`/`libcrypto3` (CVE-2026-31789, CRITICAL, fixed in 3.5.6), `musl`, `zlib`.
+2. Go libraries compiled into the Jaeger binary: Go standard library 1.25.1 (CVE-2025-68121, CRITICAL), gRPC 1.75.0 (CVE-2026-33186, CRITICAL), and HIGH findings in OpenTelemetry, `golang.org/x/crypto`, `x/net`, `x/text`, thrift, prometheus, `expr`, `xpath`.
+
+Exposure was limited (local development viewer; UI on `127.0.0.1` only; OTLP port only on the Compose network; in-memory storage), but it failed the same gate the app passes.
+
+**Attempted actions / resolution.**
+1. Chose the latest release, `jaegertracing/jaeger:2.22.0` (2026-10-06), digest `sha256:836b967b…` from Docker Hub, and scanned it before changing anything: Alpine 3.24.2, 4 findings (3 MEDIUM, 1 UNKNOWN), 0 HIGH/CRITICAL. Gate passes.
+2. Updated the pin in `compose.yaml` and the pinned-image test in `tests/test_container_config.py`.
+3. `scripts/verify.sh` now scans both images (`trivy-app-*`, `trivy-jaeger-*`).
+4. Verified live: `docker compose up`, `/readyz` ready, one question gave a trace with all 5 spans in Jaeger 2.22.0. No configuration change was needed.
+
+**Remaining limitation.** Pinned images age: new findings appear as vulnerability data updates. Re-running `scripts/verify.sh` shows them; the pin then needs a deliberate update like this one.

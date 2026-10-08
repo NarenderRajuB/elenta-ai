@@ -226,7 +226,7 @@ uv run pre-commit install          # once per clone: adds the git hook
 uv run pre-commit run --all-files  # run the hooks by hand
 ```
 
-The full verification run adds the tests, gitleaks (secrets), pip-audit and Trivy (container image), and saves every tool's output plus `summary.md` under `docs/evidence/verify/`:
+The full verification run adds the tests, gitleaks (secrets), pip-audit and Trivy (both container images: the app and Jaeger), and saves every tool's output plus `summary.md` under `docs/evidence/verify/`:
 
 ```bash
 scripts/verify.sh               # everything except container tests

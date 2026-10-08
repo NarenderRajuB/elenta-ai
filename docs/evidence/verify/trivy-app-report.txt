@@ -1,19 +1,19 @@
-$ docker run --rm -v /var/folders/r0/d_cqdn6n6n72h2gpccr7vkfh0000gn/T/tmp.GeZaydk5EE:/scan:ro -v elenta-trivy-cache:/root/.cache/trivy aquasec/trivy@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa image --input /scan/image.tar --scanners vuln --no-progress
-# 2026-10-08T22:21:41Z
+$ docker run --rm -v /var/folders/r0/d_cqdn6n6n72h2gpccr7vkfh0000gn/T/tmp.NHlzlquMXL:/scan:ro -v elenta-trivy-cache:/root/.cache/trivy aquasec/trivy@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa image --input /scan/app.tar --scanners vuln --no-progress
+# 2026-10-08T22:46:41Z
 
-2026-10-08T22:21:42Z	INFO	[vuln] Vulnerability scanning is enabled
-2026-10-08T22:21:42Z	INFO	Detected OS	family="debian" version="13.7"
-2026-10-08T22:21:42Z	INFO	[debian] Detecting vulnerabilities...	os_version="13" pkg_num=87
-2026-10-08T22:21:42Z	INFO	Number of language-specific files	num=1
-2026-10-08T22:21:42Z	INFO	[python-pkg] Detecting vulnerabilities...
-2026-10-08T22:21:42Z	WARN	Using severities from other vendors for some vulnerabilities. Read https://trivy.dev/docs/v0.75/guide/scanner/vulnerability#severity-selection for details.
+2026-10-08T22:46:41Z	INFO	[vuln] Vulnerability scanning is enabled
+2026-10-08T22:46:41Z	INFO	Detected OS	family="debian" version="13.7"
+2026-10-08T22:46:41Z	INFO	[debian] Detecting vulnerabilities...	os_version="13" pkg_num=87
+2026-10-08T22:46:41Z	INFO	Number of language-specific files	num=1
+2026-10-08T22:46:41Z	INFO	[python-pkg] Detecting vulnerabilities...
+2026-10-08T22:46:41Z	WARN	Using severities from other vendors for some vulnerabilities. Read https://trivy.dev/docs/v0.75/guide/scanner/vulnerability#severity-selection for details.
 
 Report Summary
 
 ┌──────────────────────────────────────────────────────────────────────────────────┬────────────┬─────────────────┐
 │                                      Target                                      │    Type    │ Vulnerabilities │
 ├──────────────────────────────────────────────────────────────────────────────────┼────────────┼─────────────────┤
-│ /scan/image.tar (debian 13.7)                                                    │   debian   │       164       │
+│ /scan/app.tar (debian 13.7)                                                      │   debian   │       164       │
 ├──────────────────────────────────────────────────────────────────────────────────┼────────────┼─────────────────┤
 │ app/.venv/lib/python3.12/site-packages/annotated_doc-0.0.5.dist-info/METADATA    │ python-pkg │        0        │
 ├──────────────────────────────────────────────────────────────────────────────────┼────────────┼─────────────────┤
@@ -90,8 +90,8 @@ Legend:
 - '0': Clean (no security findings detected)
 
 
-/scan/image.tar (debian 13.7)
-=============================
+/scan/app.tar (debian 13.7)
+===========================
 Total: 164 (UNKNOWN: 1, LOW: 61, MEDIUM: 58, HIGH: 44, CRITICAL: 0)
 
 ┌────────────────────┬─────────────────────┬──────────┬──────────────┬───────────────────────────────────┬───────────────┬──────────────────────────────────────────────────────────────┐

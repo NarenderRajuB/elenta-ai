@@ -79,18 +79,33 @@ run gitleaks-worktree    "REQ-122 secrets" docker run --rm -v "$PWD:/repo:ro" "$
 
 if [ "$OFFLINE" = 1 ]; then
   skip pip-audit           "REQ-122 dependencies" "--offline"
-  skip trivy-image         "REQ-122 container image" "--offline"
+  skip trivy-images        "REQ-122 container images (app, jaeger)" "--offline"
 else
   uv export --frozen --all-groups --no-emit-project --format requirements-txt > "$WORK/requirements.txt"
   run pip-audit          "REQ-122 dependencies" uv run pip-audit --disable-pip --require-hashes -r "$WORK/requirements.txt"
-  # The image is exported to a file and scanned from there, so the scanner never gets
+  # Every image Compose runs is scanned: the app and the Jaeger trace viewer (TS-010).
+  # Each image is exported to a file and scanned from there, so the scanner never gets
   # access to the Docker socket. The full report lists every finding; the gate fails
   # only on HIGH/CRITICAL findings that have a fix available (accepted risk: TS-009).
-  if docker compose build -q app && docker save elenta-ai:local -o "$WORK/image.tar"; then
-    run trivy-image-report "REQ-122 container image (all findings)" docker run --rm -v "$WORK:/scan:ro" -v elenta-trivy-cache:/root/.cache/trivy "$TRIVY_IMAGE" image --input /scan/image.tar --scanners vuln --no-progress
-    run trivy-image-gate   "REQ-122 container image (fixable HIGH/CRITICAL)" docker run --rm -v "$WORK:/scan:ro" -v elenta-trivy-cache:/root/.cache/trivy "$TRIVY_IMAGE" image --input /scan/image.tar --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1 --no-progress
+  scan_image() {  # scan_image <name> <image>
+    if docker save "$2" -o "$WORK/$1.tar"; then
+      run "trivy-$1-report" "REQ-122 $1 image (all findings)" docker run --rm -v "$WORK:/scan:ro" -v elenta-trivy-cache:/root/.cache/trivy "$TRIVY_IMAGE" image --input "/scan/$1.tar" --scanners vuln --no-progress
+      run "trivy-$1-gate"   "REQ-122 $1 image (fixable HIGH/CRITICAL)" docker run --rm -v "$WORK:/scan:ro" -v elenta-trivy-cache:/root/.cache/trivy "$TRIVY_IMAGE" image --input "/scan/$1.tar" --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1 --no-progress
+    else
+      echo "| trivy-$1 | REQ-122 | **FAIL** (image export) | - |" >> "$SUMMARY"; echo "FAIL  trivy-$1 (image export)"; FAILED=1
+    fi
+  }
+  if docker compose build -q app; then
+    scan_image app elenta-ai:local
   else
-    echo "| trivy-image | REQ-122 | **FAIL** (image build) | - |" >> "$SUMMARY"; echo "FAIL  image build"; FAILED=1
+    echo "| trivy-app | REQ-122 | **FAIL** (image build) | - |" >> "$SUMMARY"; echo "FAIL  image build"; FAILED=1
+  fi
+  # The Jaeger image reference (tag and digest) is read from compose.yaml, so it is pinned in one place.
+  JAEGER_IMAGE="$(sed -n 's/^ *image: *\(jaegertracing\/jaeger:.*\)$/\1/p' compose.yaml)"
+  if [ -n "$JAEGER_IMAGE" ] && docker pull -q "$JAEGER_IMAGE" > /dev/null; then
+    scan_image jaeger "$JAEGER_IMAGE"
+  else
+    echo "| trivy-jaeger | REQ-122 | **FAIL** (image not found or pull failed) | - |" >> "$SUMMARY"; echo "FAIL  trivy-jaeger (pull)"; FAILED=1
   fi
 fi
 

@@ -61,7 +61,7 @@ services:
   # when this container restarts (documented limitation). Image pinned by digest so the
   # offline setup is repeatable.
   jaeger:
-    image: jaegertracing/jaeger:2.11.0@sha256:b585df1b6299bbbd16bf7c679da30389349736e4b6bc8f4f500142a75bf26ca8
+    image: jaegertracing/jaeger:2.22.0@sha256:836b967b5abcf1f7758066aa6b348619267a2f1459f72d472840570f9bd88a17
     ports:
       - "127.0.0.1:16686:16686"
     cap_drop:

@@ -1,0 +1,29 @@
+$ uv run pytest -m container -v
+# 2026-10-08T22:45:42Z
+
+============================= test session starts ==============================
+platform darwin -- Python 3.12.6, pytest-9.1.1, pluggy-1.6.0 -- /Users/nbongoni/ai-asmt/elenta-ai/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/nbongoni/ai-asmt/elenta-ai
+configfile: pyproject.toml
+testpaths: tests
+plugins: platformdirs-4.12.4, anyio-4.15.1
+collecting ... collected 540 items / 525 deselected / 15 selected
+
+tests/test_container_runtime.py::test_positive_container_becomes_healthy PASSED [  6%]
+tests/test_container_runtime.py::test_positive_runs_as_non_root_uid_10001 PASSED [ 13%]
+tests/test_container_runtime.py::test_positive_ready_against_host_ollama PASSED [ 20%]
+tests/test_container_runtime.py::test_positive_host_files_visible_under_data PASSED [ 26%]
+tests/test_container_runtime.py::test_positive_live_changes_visible_through_bind_mount PASSED [ 33%]
+tests/test_container_runtime.py::test_positive_startup_log_reports_corpus PASSED [ 40%]
+tests/test_container_runtime.py::test_negative_missing_config_exits_2_with_clear_message PASSED [ 46%]
+tests/test_container_runtime.py::test_negative_missing_corpus_mount_aborts_startup PASSED [ 53%]
+tests/test_container_runtime.py::test_negative_corpus_mount_is_read_only PASSED [ 60%]
+tests/test_container_runtime.py::test_negative_app_filesystem_is_read_only PASSED [ 66%]
+tests/test_container_runtime.py::test_negative_model_unreachable_reports_not_ready PASSED [ 73%]
+tests/test_container_runtime.py::test_edge_tmp_is_writable PASSED        [ 80%]
+tests/test_container_runtime.py::test_edge_no_linux_capabilities PASSED  [ 86%]
+tests/test_container_runtime.py::test_edge_dev_tools_not_in_image PASSED [ 93%]
+tests/test_container_runtime.py::test_edge_starts_with_no_network_at_all PASSED [100%]
+
+===================== 15 passed, 525 deselected in 49.71s ======================

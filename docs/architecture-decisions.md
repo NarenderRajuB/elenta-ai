@@ -261,6 +261,7 @@ Template:
 - **Attributes:** counts, timings, chunk ids, budget, model name, labelled token counts (`reported` / `estimated (chars/4)`), guard results, error codes. **Never** the question, prompt or document text (tested with marker strings).
 - **Logs:** JSON lines to stderr for every logger including uvicorn (`log_config=None`). `request_id` comes from a context variable that `anyio.to_thread` copies into worker threads, so corpus/index logs carry it too. httpx INFO stays silenced (TS-007).
 - **Export interval:** 1 s (SDK default 5 s), so a trace can be opened right after the answer during the demo.
+- **Revised 2026-10-08 (TS-010):** viewer image updated to `jaegertracing/jaeger:2.22.0`, pinned by digest (`sha256:836b967b…`), 175 MB. 2.11.0 failed the Trivy gate (73 fixable HIGH/CRITICAL findings); 2.22.0 has none. No configuration change was needed: the OTLP/HTTP endpoint, UI port and in-memory storage behave the same (verified live: 5 spans per request).
 
 **Verified live (2026-10-08, Compose + gemma3:1b):** one request gives 5 spans in Jaeger with correct parent links, stage durations (e.g. inference 5,809 ms, first token 5,741 ms), reported token counts 445/4 vs 415 estimated, and selected chunk ids matching the UI's sources.
 ---
@@ -506,6 +507,7 @@ Template:
 - − Trivy reports Debian base-image findings with no fix available; they are listed in the full report and accepted (TS-009). The gate covers only fixable HIGH/CRITICAL findings.
 - Applying ruff format and mypy reformatted existing code and needed small type-driven code changes (e.g. `app/chat.py` tests `insufficient_reason` directly). All tests pass after the changes.
 - Follow-up: `uv run pre-commit install` is needed once per clone (documented in the README).
+- **Revised 2026-10-08 (TS-010):** Trivy now scans every image Compose runs, the app and the Jaeger viewer, with the same report and gate for each (`trivy-app-*`, `trivy-jaeger-*`). The Jaeger reference is read from `compose.yaml`, so it is pinned in one place.
 
 ---
 

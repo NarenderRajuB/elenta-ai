@@ -146,7 +146,7 @@ def test_positive_app_exports_traces_to_local_jaeger(app_service):
 
 
 def test_positive_jaeger_image_pinned_by_digest(jaeger_service):
-    assert jaeger_service["image"].startswith("jaegertracing/jaeger:2.11.0@sha256:")
+    assert jaeger_service["image"].startswith("jaegertracing/jaeger:2.22.0@sha256:")
 
 
 def test_negative_jaeger_ui_only_on_loopback_and_otlp_not_published(jaeger_service):

@@ -47,6 +47,7 @@ These are deliberate trade-offs or measured weaknesses, each recorded where it w
 **Safety**
 - **Prompt injection is reduced, not eliminated.** Code-level controls stop documents from changing the role, removing sources, leaking the instructions or adding reasoning to the answer. The remaining risk is the model repeating an instruction-like claim (for example an "approval") in its own words; the evaluation measures it but cannot rule it out (ADR-006, TS-006).
 - **The instruction-leak guard catches verbatim or near-verbatim copying**, not paraphrase (ADR-006 C4).
+- Full list of controls and remaining risks: [Security](security.md).
 
 **Corpus**
 - **A file being written is not served at all** until it has been unchanged for the settle window (0.5 s) and read cleanly, not even its previous version (ADR-005).

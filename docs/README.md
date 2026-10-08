@@ -12,7 +12,7 @@ The guide to the service (REQ-100). The repository [README](../README.md) is the
 | [Setup](setup.md) | Prerequisites, model pull, configuration, startup, health check, first request | REQ-104 |
 | [Configuration](configuration.md) | Every environment variable and its effect | REQ-105 |
 | [Operations](operations.md) | Logs and traces, corpus refresh, restart and recovery, formats, platform notes | REQ-106 |
-| Security *(to be written)* | Trust boundaries, prompt injection, rendering, filesystem, network, secrets, remaining risks | REQ-107 |
+| [Security](security.md) | Trust boundaries, prompt injection, rendering, filesystem, network, secrets, remaining risks | REQ-107 |
 | Failure handling *(to be written)* | Behaviour for each failure mode in the brief | REQ-108 |
 
 ## Records kept while working

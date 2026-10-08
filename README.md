@@ -15,13 +15,14 @@ A small, local, containerised chat service that answers questions from a live do
 | [docs/setup.md](docs/setup.md) | From a fresh machine to the first streamed answer, step by step |
 | [docs/configuration.md](docs/configuration.md) | Every environment variable: default, accepted values, effect; combined rules |
 | [docs/operations.md](docs/operations.md) | Logs, traces, corpus refresh, restart and recovery, formats and limits, platform notes |
+| [docs/security.md](docs/security.md) | Trust boundaries, prompt-injection controls and results, rendering, filesystem, network, secrets, remaining risks |
 | [docs/spec.md](docs/spec.md) | Structured summary of the brief, interpretations, open questions |
 | [docs/requirements.md](docs/requirements.md) | Requirements register (REQ-001 … REQ-141), each traced to a brief section (`§` = section of the brief) |
 | [docs/acceptance-criteria.md](docs/acceptance-criteria.md) | Live review scenarios and per-requirement acceptance criteria |
 | [docs/architecture-decisions.md](docs/architecture-decisions.md) | Decision log (ADRs) |
 | [docs/troubleshooting-log.md](docs/troubleshooting-log.md) | Issues and dead ends, in the order they occurred |
 
-The rest of the guide (security, failure handling) is being added under `docs/`; see [docs/README.md](docs/README.md) for its current state.
+The last part of the guide (failure handling) is being added under `docs/`; see [docs/README.md](docs/README.md) for its current state.
 
 ## Current architecture decisions
 

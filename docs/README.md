@@ -11,7 +11,7 @@ The guide to the service (REQ-100). The repository [README](../README.md) is the
 | [Request and data flow](request-flow.md) | Corpus refresh and chat flow, with diagrams; following one request | REQ-103 |
 | [Setup](setup.md) | Prerequisites, model pull, configuration, startup, health check, first request | REQ-104 |
 | [Configuration](configuration.md) | Every environment variable and its effect | REQ-105 |
-| Operations *(to be written)* | Logs and traces, corpus refresh, restart and recovery, formats, platform notes | REQ-106 |
+| [Operations](operations.md) | Logs and traces, corpus refresh, restart and recovery, formats, platform notes | REQ-106 |
 | Security *(to be written)* | Trust boundaries, prompt injection, rendering, filesystem, network, secrets, remaining risks | REQ-107 |
 | Failure handling *(to be written)* | Behaviour for each failure mode in the brief | REQ-108 |
 

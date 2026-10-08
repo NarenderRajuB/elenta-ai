@@ -1,0 +1,303 @@
+Architectu# Architecture Decision Records
+
+Decision log required by brief §5.11 (REQ-110, REQ-112). Entries are appended **in the order decisions are made**. An entry is never rewritten after acceptance; if a decision changes, a new ADR supersedes it and the old one is marked `Superseded by ADR-xxx`.
+
+**Statuses**: `Proposed` (drafted, awaiting candidate acceptance) · `Accepted` · `Superseded` · `Rejected`.
+
+> **Current state (2026-10-08):** All ADRs below are `Proposed`. They were drafted from the brief before any code was written. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Items that depend on facts not yet verified on the machine (e.g. DMR availability) say so.
+
+Template:
+
+```
+## ADR-NNN: Title
+- Status / Date / Requirements
+- Context
+- Decision
+- Rationale
+- Alternatives rejected
+- Consequences (positive, negative, follow-ups)
+```
+
+---
+
+## ADR-001: Python 3.12 with FastAPI + Uvicorn for the HTTP service
+
+- **Status:** Proposed · **Date:** 2026-10-08
+- **Requirements:** REQ-030, REQ-031, REQ-033, REQ-093, REQ-094
+
+**Context.** We need an HTTP server that can stream responses, detect client disconnects, and serve a static page. The brief prefers "explicit, human-readable code over unnecessary framework abstraction" (§5.9).
+
+**Decision.** Python 3.12, FastAPI on Uvicorn. Use FastAPI only for routing, request validation and `StreamingResponse`; no dependency-injection trees, no background-task framework, no ORM.
+
+**Rationale.** Async streaming generators map directly onto the token stream; `request.is_disconnected()` and generator cancellation give a clear disconnect story (REQ-033). FastAPI is widely known, so reviewers can follow it.
+
+**Alternatives rejected.**
+- *Standard library `http.server`*: no async streaming, manual disconnect handling — more code to defend, not less.
+- *Plain Starlette*: viable and lighter; rejected only because FastAPI's request-body validation removes hand-written parsing. (Revisit if FastAPI adds nothing we use.)
+- *Flask*: sync-first; streaming with cancellation is awkward.
+
+**Consequences.** + Small, conventional code. − Pulls in Pydantic transitively. Follow-up: pin versions; include in dependency scan (REQ-122).
+
+---
+
+## ADR-002: Call the model via raw HTTP to the OpenAI-compatible `/chat/completions` endpoint using `httpx`
+
+- **Status:** Proposed · **Date:** 2026-10-08
+- **Requirements:** REQ-015, REQ-022, REQ-031, REQ-033, REQ-076
+
+**Context.** Endpoint and model must come only from `LLM_URL` and `LLM_MODEL`; no provider-specific behaviour (§5.1, §5.2). DMR and Ollama both expose an OpenAI-compatible API.
+
+**Decision.** A single inference module issues `POST {LLM_URL}/chat/completions` with `stream: true` using `httpx.AsyncClient`, parses the `data:` SSE lines, and yields content deltas. Explicit connect/read timeouts come from env vars. Closing the response on cancellation aborts upstream work.
+
+**Rationale.** ~50 lines of explicit code we fully own; every byte on the wire is visible and explainable. No SDK-specific retries, headers or behaviours hidden from us.
+
+**Alternatives rejected.**
+- *`openai` Python SDK*: works, but adds a large dependency with its own retry/timeouts behaviour that must then be explained and configured.
+- *LangChain / LlamaIndex*: heavy abstraction; directly contrary to §5.9.
+- *Ollama/DMR native APIs*: provider-specific — violates REQ-022.
+
+**Consequences.** + Endpoint-agnostic, testable with a fake HTTP server. − We own SSE parsing edge cases. Follow-up: whether to request `stream_options.include_usage` (an OpenAI-standard field) for reported token counts — see ADR-007.
+
+---
+
+## ADR-003: Docker Model Runner as default backend with a ≤1B quantised GGUF model
+
+- **Status:** Rejected — DMR not available on the candidate hardware; superseded by ADR-013 (see TS-001) · **Date:** 2026-10-08
+- **Requirements:** REQ-001, REQ-011, REQ-020, REQ-021
+
+**Context.** DMR is preferred (§5.2); model must be quantised GGUF ≤1B. The candidate's machine is macOS with Docker Desktop.
+
+**Decision.** Use DMR, reached from the app container via its OpenAI-compatible base URL, configured only through `LLM_URL`. Model: a small instruct model from Docker Hub `ai/` (candidates to test: a ~0.5B–1B Qwen, Llama 3.2 1B or Gemma 3 1B quantised tag). The exact tag is chosen after pulling and testing streaming on the machine, then recorded here.
+
+**Rationale.** Matches the preferred backend; small models start fast and run on a laptop.
+
+**Alternatives rejected.**
+- *Ollama as default*: permitted only where DMR is unavailable; kept as documented fallback via `LLM_URL`/`LLM_MODEL`.
+- *Models >1B*: violate REQ-020.
+
+**Consequences.** + Native fit for the brief. − Small models follow instructions weakly, which is why safety must be enforced outside the model (ADR-006). Follow-up: decide whether Compose declares the model via the top-level `models:` element or the app simply receives `LLM_URL`; record the exact DMR URL used from inside a container.
+
+---
+
+## ADR-004: Server-Sent Events over `POST /chat` as the streaming transport
+
+- **Status:** Proposed · **Date:** 2026-10-08
+- **Requirements:** REQ-031, REQ-032, REQ-033, REQ-076, REQ-082
+
+**Context.** Need explicit, documented framing including errors mid-stream (§5.3).
+
+**Decision.** `POST /chat` returns `text/event-stream`. Named events, each a single JSON `data:` line:
+`meta` (request_id, trace_id) → `sources` (selected source IDs, budget/truncation info) → `token` (repeated) → `done` (finish reason, token counts) **or** `error` (code, message, request_id). Exactly one terminal event per stream. The browser reads it with `fetch()` + `ReadableStream` (since `EventSource` only supports GET).
+
+**Rationale.** SSE is plain text, inspectable with `curl -N`, and the brief names it explicitly. Sending `sources` as a structured event guarantees attribution even if the model omits it (supports REQ-051, REQ-062).
+
+**Alternatives rejected.**
+- *WebSocket*: bidirectional, unnecessary; harder to show with curl.
+- *NDJSON*: equally viable; SSE chosen for its standard framing and named events.
+
+**Consequences.** + Errors after stream start have a defined shape. − Proxies can buffer SSE; we set `Cache-Control: no-cache` and `X-Accel-Buffering: no` and avoid any compression middleware.
+
+---
+
+## ADR-005: Request-time corpus refresh using a stat fingerprint, with stable-read checks
+
+- **Status:** Proposed · **Date:** 2026-10-08
+- **Requirements:** REQ-003, REQ-042, REQ-043, REQ-044, REQ-045, REQ-046, REQ-056, REQ-064, REQ-073
+
+**Context.** Corpus may change at any time; deletions must not leave stale chunks; partially written files must not produce mixed versions; Docker Desktop bind mounts on macOS do not reliably propagate inotify events into Linux containers.
+
+**Decision.** At the start of every chat request (inside the "corpus refresh" span), walk `/data`, and for each candidate file compare `(path, size, mtime_ns)` against the in-memory index. Re-read only new/changed files; drop index entries for paths no longer present. A file is accepted only if `stat` is identical before and after reading **and** it decodes as UTF-8; otherwise it is excluded for this request with a structured diagnostic and retried next request. Index is rebuilt as a new immutable snapshot and swapped atomically, so a request always sees one consistent corpus version. Path rules: resolve real path and require it to stay under `/data`; skip symlinks *(policy to confirm)*, hidden files/dirs, and unsupported extensions, each with a diagnostic.
+
+**Consistency model / ready-to-serve point.** A change is served by the first request that **starts** after the file's write has finished and its size/mtime are stable across our read. Requests are strongly consistent with the filesystem as observed at their start.
+
+**Rationale.** Works identically on native Linux and Docker Desktop (no watcher dependency); trivially explains deletion semantics; easy to test.
+
+**Alternatives rejected.**
+- *`watchdog`/inotify watcher*: unreliable through Docker Desktop bind mounts; adds a thread and race conditions.
+- *Background polling*: introduces a staleness window and the question "has the poller run yet?".
+- *Hybrid*: more moving parts than a small corpus needs.
+
+**Consequences.** + Simple, deterministic, platform-independent. − Per-request cost proportional to file count (one `stat` each); acceptable for a small corpus — enforce a documented max file count / max file size. − An mtime-preserving same-size overwrite could be missed; mitigation to consider: include a content hash for small files. Document limits.
+
+---
+
+## ADR-006: Trust boundaries and prompt assembly enforced in code, not delegated to the model
+
+- **Status:** Proposed · **Date:** 2026-10-08
+- **Requirements:** REQ-052, REQ-060, REQ-061, REQ-062, REQ-063, REQ-065, REQ-068, REQ-072
+
+**Context.** "Both document content and model output are untrusted … rather than relying on the model to police itself" (§5.6). A ≤1B model will not reliably resist injection.
+
+**Decision.**
+1. **Instruction hierarchy:** `system` message holds only fixed application instructions (from code, never from documents or user). Evidence goes into a separate message, each chunk wrapped in clearly delimited blocks labelled with its chunk ID, with delimiter-like sequences in document text neutralised. The user question goes last.
+2. **Attribution outside the model:** sources are sent to the client as a structured `sources` event computed by our selection code, so a document cannot suppress attribution.
+3. **Output filter:** stream passes through a deterministic filter that strips known reasoning markers (e.g. `<think>…</think>`) and logs when it does.
+4. **No execution:** document text is only ever handled as a string; no `eval`, templates (no Jinja on doc content), shell or tool calls exist in the system.
+5. **Rendering:** browser uses `textContent` only; no Markdown rendering (see ADR-010).
+6. **Logging:** log IDs, counts and lengths — never full prompts or document bodies.
+
+**Rationale.** Each control is deterministic and testable without the model. The model's compliance becomes defence-in-depth, not the boundary.
+
+**Alternatives rejected.**
+- *Prompt-only defences*: rely on the model — explicitly ruled out.
+- *LLM-based injection classifier*: model policing model; extra latency and still unreliable.
+
+**Consequences.** + Demonstrable, testable boundaries. − We cannot *guarantee* the small model's prose never echoes injected text; the remaining risk is documented in Security docs. Follow-up: decide whether to detect leakage of the system prompt text in output (e.g. substring check) and block it.
+
+---
+
+## ADR-007: Lexical (BM25) evidence selection with an explicit, estimated token budget
+
+- **Status:** Proposed · **Date:** 2026-10-08
+- **Requirements:** REQ-050, REQ-051, REQ-053, REQ-055, REQ-071, REQ-075, REQ-083
+
+**Context.** Need a deliberate, explainable selection method and an explicit context-token budget; "a simple approach is acceptable when its limits are understood and documented" (§5.5).
+
+**Decision.**
+- **Chunking:** split each file into fixed-size, paragraph-aware chunks. Chunk ID = `relative_path#index` plus a short content hash, so IDs are stable for identical content.
+- **Ranking:** BM25 over chunk tokens, implemented in plain Python (~60 lines) — no embedding model.
+- **Relevance floor:** if no chunk scores above a configured threshold, skip the model and return "insufficient evidence" (REQ-053, REQ-075).
+- **Budget:** `CONTEXT_TOKEN_BUDGET` env var. Add chunks in rank order until the budget is reached; record included, dropped and truncated chunk IDs in the trace and in the `sources` event.
+- **Token counting:** estimate with a documented heuristic (characters ÷ 4) labelled `estimated`; if the endpoint returns `usage` in the stream, record it labelled `reported`.
+
+**Rationale.** Fully offline, no second model to pull, deterministic and explainable line by line.
+
+**Alternatives rejected.**
+- *Embeddings via DMR/Ollama*: better semantic recall but needs a second model, an embedding endpoint (provider variance) and a vector store — more to run and explain.
+- *Exact tokenizer (e.g. HF `tokenizers`)*: needs tokenizer files matching the model, which differ per `LLM_MODEL`; breaks endpoint-agnosticism.
+- *Send the whole corpus*: silent overflow — explicitly forbidden.
+
+**Consequences.** + Simple, testable. − Misses synonyms/paraphrases; heuristic token count can be off for non-English text, so budget leaves a safety margin below the model's real context. Limits documented.
+
+---
+
+## ADR-008: OpenTelemetry tracing exported to a local Jaeger container; JSON logs to stdout
+
+- **Status:** Proposed · **Date:** 2026-10-08
+- **Requirements:** REQ-004, REQ-080 – REQ-085, REQ-012, REQ-068
+
+**Context.** One trace per request, stage spans, token counts, local tooling only, and a trace the reviewer can open live (§5.8, §7.9).
+
+**Decision.** OpenTelemetry Python SDK with OTLP exporter to a `jaegertracing/all-in-one` service in the same Compose file (UI on localhost). Structured JSON logs to stdout via the standard `logging` module with a small JSON formatter; every log line carries `request_id` and `trace_id`.
+
+**Rationale.** OTel is the standard named by the brief; Jaeger all-in-one is a single local container with an in-memory store and a UI.
+
+**Alternatives rejected.**
+- *Phoenix*: LLM-focused UI but heavier and pulls in more dependencies.
+- *Write traces to a JSON file only*: zero extra containers, but no viewer to "open one request trace" convincingly.
+- *Hosted backends (Honeycomb, Langfuse cloud, etc.)*: violate REQ-012/REQ-085.
+
+**Consequences.** + Real trace UI for the demo. − Adds one container image that must be pulled before going offline (document in Setup). − Jaeger in-memory storage loses traces on restart (documented limitation). **Needs candidate confirmation** as it adds a runtime component.
+
+---
+
+## ADR-009: Conflict handling — no automatic precedence; surface conflicts with named sources
+
+- **Status:** Proposed · **Date:** 2026-10-08
+- **Requirements:** REQ-054, REQ-074
+
+**Context.** "When current documents conflict and no defensible precedence rule resolves the conflict, surface the conflict and identify the competing sources" (§5.5). File mtime is not a defensible indicator of truth.
+
+**Decision.** Define no automatic precedence rule. The system instruction tells the model to state disagreements between cited sources and name them; because every evidence block carries its chunk ID and the client always receives the structured `sources` list, the competing sources are always visible to the user.
+
+**Rationale.** Any precedence rule we invent (newest file wins, alphabetical, etc.) would itself need defending and could be wrong.
+
+**Alternatives rejected.**
+- *Newest-mtime wins*: mtime reflects copy time, not authority.
+- *Deterministic contradiction detection*: not feasible to do reliably and simply.
+
+**Consequences.** − Conflict *detection* relies on the model's reading; a weak model may miss it. This is a stated limitation. Follow-up: consider an opt-in documented convention (e.g. a front-matter `effective_date`) only if the candidate decides it is defensible.
+
+---
+
+## ADR-010: Minimal static browser UI with plain-text rendering only
+
+- **Status:** Proposed · **Date:** 2026-10-08
+- **Requirements:** REQ-005, REQ-030, REQ-065
+
+**Context.** UI must be clean and usable, and must never place untrusted content into an executable HTML sink.
+
+**Decision.** One static HTML file + one vanilla JS file + one CSS file served by the app. All untrusted content (answer tokens, source names, error messages) is written with `textContent`. No Markdown rendering. Strict `Content-Security-Policy` header (no inline scripts).
+
+**Rationale.** Removes the need for a sanitiser library and its configuration; trivially auditable (grep for `innerHTML` returns nothing).
+
+**Alternatives rejected.**
+- *React/Vue SPA*: build toolchain and dependencies disproportionate to the scope.
+- *Markdown + DOMPurify*: nicer formatting, but adds a sanitiser whose config must be defended.
+
+**Consequences.** + Minimal attack surface. − Answers render as plain text (line breaks preserved via CSS `white-space: pre-wrap`).
+
+---
+
+## ADR-011: Configuration via a single env-var module with fail-fast validation
+
+- **Status:** Proposed · **Date:** 2026-10-08
+- **Requirements:** REQ-013, REQ-014, REQ-015, REQ-016
+
+**Decision.** One `config` module reads `os.environ` into a frozen dataclass at startup, validating types, ranges and URL shape; any problem raises a single error listing all invalid/missing variables and the process exits non-zero. `.env.example` documents every variable.
+
+**Alternatives rejected.** *`pydantic-settings`*: capable but adds a dependency and implicit behaviour for something ~40 lines of explicit code can do.
+
+**Consequences.** + Explicit and testable. − Hand-written validation must be kept in sync with docs (covered by a test comparing `.env.example` keys to config fields).
+
+---
+
+## ADR-012: Container security posture
+
+- **Status:** Proposed · **Date:** 2026-10-08
+- **Requirements:** REQ-066, REQ-067, REQ-064, REQ-012
+
+**Decision.** Slim Python base image; app runs as a dedicated non-root UID; `./data:/data:ro`; no secrets baked into the image; only the app port (and trace UI port) published on localhost.
+
+**Alternatives rejected.** *Read-write corpus mount*: not needed — the app never writes to `/data`.
+
+**Consequences.** + Matches brief defaults with no justification needed. Follow-up: consider `read_only: true` root filesystem with a tmpfs if nothing needs to write.
+
+---
+
+## ADR-013: Ollama (OpenAI-compatible endpoint) as backend, model `qwen2.5:0.5b` (Q4_K_M)
+
+- **Status:** Accepted, with Option B (Ollama native on the host), chosen by the candidate on 2026-10-08 · **Date:** 2026-10-08
+- **Requirements:** REQ-001, REQ-011, REQ-012, REQ-015, REQ-020, REQ-021, REQ-022, REQ-055, REQ-083
+- **Supersedes:** ADR-003
+
+**Context.** Development and review machine: MacBook Pro, Intel Core i7-8850H (x86_64), macOS 15.7.9, Docker Desktop 4.94.0, Compose v5.5.1. `docker model` is an unknown command and Docker Desktop ships no `docker-model` CLI plugin on this host. On macOS, Docker Model Runner only supports Apple Silicon (TS-001). The brief §5.2 permits "an OpenAI-compatible local endpoint such as Ollama" where DMR is unavailable on the candidate hardware. Ollama 0.35.1 is already installed on the host.
+
+**Verified facts (2026-10-08, host curl against `http://localhost:11434/v1`):**
+- `qwen2.5:0.5b`: 494.03M parameters, quantisation `Q4_K_M` (GGUF), native context length 32768. Satisfies REQ-020.
+- `POST /v1/chat/completions` with `stream: true` returns standard OpenAI `chat.completion.chunk` SSE frames, one per token or small token group, ending with `data: [DONE]`. This gives genuine progressive streaming (REQ-031).
+- With `stream_options.include_usage: true`, the last chunk includes standard `usage` (`prompt_tokens`, `completion_tokens`), so token counts can be recorded as `reported` (REQ-083). Ollama also adds a non-standard `timings` object. **We do not read it** (REQ-022).
+
+**Decision.**
+1. The backend is Ollama, reached only via `LLM_URL` (base URL ending `/v1`) and `LLM_MODEL=qwen2.5:0.5b`. The application code contains nothing Ollama-specific. Switching to DMR on Apple Silicon only needs a change to those two variables (REQ-015).
+2. **Compose topology: Option B was chosen.** Both options are kept below as considered:
+   - **Option A (rejected): Ollama runs as a Compose service** (`ollama/ollama` image, model stored in a named volume). One-time pull: `docker compose run --rm ollama ollama pull qwen2.5:0.5b` (exact command to be confirmed in Setup docs). After that, a single `docker compose up` starts app + model server + trace viewer. This satisfies REQ-011 literally. Server-side context length can be pinned in Compose with the server's own env var, so the app stays endpoint-agnostic.
+   - **Option B: Ollama runs natively on the host**, and the app reaches it at `http://host.docker.internal:11434/v1`. This reuses the already-pulled model and needs no extra image. However, `docker compose up` would not start the model server, so the reviewer depends on a separately running host process. This is weaker against REQ-011.
+   - **Why B (candidate's choice):** the model is already pulled and verified on the host. There is no extra image to pull or keep offline, and native host inference avoids the Docker Desktop VM's CPU/RAM limits on an Intel machine. The model server is treated as a host prerequisite, in the same way DMR is a host-side component in the preferred design.
+   - **How REQ-011 is still honoured:** "the complete working system" means the application stack that `docker compose up` starts (app and trace viewer), plus a model endpoint that must already be serving. Setup docs will list `ollama serve` running with `qwen2.5:0.5b` pulled as a prerequisite, next to "model has been pulled". The app's readiness signal (REQ-017) must report clearly when the model endpoint is unreachable, so a missing host process shows up as a clear failure rather than a silent one.
+
+**Rationale.** Ollama is the fallback the brief names explicitly. `qwen2.5:0.5b` is clearly under the 1B limit, is already pulled, and has been verified to stream through the standard API.
+
+**Alternatives rejected.**
+- *Docker Model Runner*: not available on Intel macOS (TS-001).
+- *`llama3.2:1b`*: about 1.24B actual parameters, which arguably breaks "1 billion parameters or fewer".
+- *`llama3.2:latest` / `qwen2.5:latest` / `gemma3:4b`* (already on the host): 3B, 7B and 4B, so they violate REQ-020.
+- *`gemma3:1b`*: about 1.0B, a possible secondary candidate. Not tested; no need while qwen2.5:0.5b works.
+
+**Consequences.**
+- \+ Uses only the standard OpenAI-compatible contract, so behaviour is portable to DMR.
+- − **Silent context truncation risk:** Ollama decides the effective context window server-side, not per request through the OpenAI API. If our prompt exceeds it, the server may truncate without telling us. Mitigation: `CONTEXT_TOKEN_BUDGET` must stay well below the server's effective context, and docs must state that value. With Option B this is a host-side Ollama server setting (e.g. a context-length env var when starting `ollama serve`; exact variable to be verified and documented). Ties to REQ-055 and REQ-071.
+- − CPU-only inference on Intel. Latency to be measured and recorded.
+- − Option B: Ollama listens on `127.0.0.1:11434` by default. Reachability from the app container via `host.docker.internal` on Docker Desktop for Mac is **not yet verified**; check it when the inference client is built and log the result in the troubleshooting log.
+- − Option B: Compose cannot health-check or start the model server. Its state is visible only through the app's readiness signal and logs.
+- − Native Linux reviewers would need `extra_hosts: host.docker.internal:host-gateway` in Compose. To be documented in the platform notes (REQ-046 / REQ-106).
+- Follow-up: Ollama ships a default system prompt in the model (`You are Qwen…`). Our own `system` message replaces it per request; this needs verifying when prompt assembly is built (ADR-006).
+
+---
+
+## Pending decisions (to be recorded as ADRs when made)
+
+- Symlink policy inside `/data` (ADR-005).
+- Chunk size, overlap, relevance threshold, default budget values (ADR-007).
+- Tooling for REQ-121/122 (e.g. `ruff`, `mypy`, `pip-audit`, `bandit`, image scan) — choose when setting up the project skeleton.
+- Test strategy: fake OpenAI-compatible streaming server for deterministic tests.

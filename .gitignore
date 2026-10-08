@@ -1,2 +1,5 @@
 # IDE settings (local only, not part of the deliverable)
 .idea/
+
+# Assessment brief (employer document, not for the public repo)
+docs/ELENTA_Candidate_Assesment.pdf

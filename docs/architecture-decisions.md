@@ -4,7 +4,7 @@ Decision log required by brief §5.11 (REQ-110, REQ-112). Entries are appended *
 
 **Statuses**: `Proposed` (drafted, awaiting candidate acceptance) · `Accepted` · `Superseded` · `Rejected`.
 
-> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-011, ADR-013, ADR-014. Rejected: ADR-003.
+> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-002, ADR-011, ADR-013, ADR-014, ADR-015. Rejected: ADR-003.
 
 Template:
 
@@ -42,7 +42,7 @@ Template:
 
 ## ADR-002: Call the model via raw HTTP to the OpenAI-compatible `/chat/completions` endpoint using `httpx`
 
-- **Status:** Proposed · **Date:** 2026-10-08
+- **Status:** Accepted by the candidate on 2026-10-08, with the offline condition below · **Date:** 2026-10-08
 - **Requirements:** REQ-015, REQ-022, REQ-031, REQ-033, REQ-076
 
 **Context.** Endpoint and model must come only from `LLM_URL` and `LLM_MODEL`; no provider-specific behaviour (§5.1, §5.2). DMR and Ollama both expose an OpenAI-compatible API.
@@ -55,6 +55,11 @@ Template:
 - *`openai` Python SDK*: works, but adds a large dependency with its own retry/timeouts behaviour that must then be explained and configured.
 - *LangChain / LlamaIndex*: heavy abstraction; directly contrary to §5.9.
 - *Ollama/DMR native APIs*: provider-specific — violates REQ-022.
+
+**Offline condition (added on acceptance, 2026-10-08).** The candidate required that, once installed, `httpx` works with no internet access. How this is met:
+- Installation (`uv sync`) is the only online step. Packages land in `.venv` and uv's cache; `uv sync --offline` works afterwards. The container image will bake them in at build time.
+- `httpx` has no telemetry or update checks. Its only outbound traffic is the requests we make.
+- The client is created with `trust_env=False`, so `HTTP(S)_PROXY`, `NETRC` and similar environment settings cannot redirect traffic away from `LLM_URL`. This is tested in `tests/test_health.py`.
 
 **Consequences.** + Endpoint-agnostic, testable with a fake HTTP server. − We own SSE parsing edge cases. Follow-up: whether to request `stream_options.include_usage` (an OpenAI-standard field) for reported token counts — see ADR-007.
 
@@ -311,6 +316,33 @@ Template:
 - *Poetry*: similar outcome, heavier tool.
 
 **Consequences.** + Reproducible environment; the wrong interpreter can't be picked up by accident. − Reviewers need `uv` installed to run tests locally (to be listed in Setup). Follow-up: the Dockerfile must install from `uv.lock`, so the image matches the tested environment.
+
+---
+
+## ADR-015: Separate liveness and readiness endpoints; readiness probes the model endpoint
+
+- **Status:** Accepted by the candidate on 2026-10-08, including the model-list check (`model_not_found`) · **Date:** 2026-10-08
+- **Requirements:** REQ-016, REQ-017, REQ-022, REQ-068
+
+**Context.** REQ-017 asks for "a practical health or readiness signal". Ollama runs natively on the host (ADR-013), so Compose cannot start or health-check it, and a stopped Ollama would otherwise only show up as a failed chat request.
+
+**Decision.**
+- `GET /healthz` (liveness) always returns `200 {"status":"ok"}` while the process serves HTTP. It checks nothing else.
+- `GET /readyz` (readiness) calls the standard OpenAI-compatible `GET {LLM_URL}/models` with a configurable timeout (`LLM_HEALTH_TIMEOUT_SECONDS`, default 3s). It returns `200 ready` only if the endpoint answers **and** lists `LLM_MODEL` exactly. Otherwise it returns `503 not_ready` with one fixed reason code: `timeout`, `unreachable`, `http_error`, `invalid_response` or `model_not_found`.
+- No exception text or URL appears in responses, because `LLM_URL` could contain credentials.
+- The process entry point (`python -m app`) validates config before creating any socket. On error it prints the problem list to stderr and exits with code **2**, without a traceback.
+- Optional `APP_HOST` (default `127.0.0.1`) and `APP_PORT` (default `8000`) control the bind address. Loopback is the default so a local run isn't exposed on the network; the container will set `0.0.0.0` explicitly.
+
+**Rationale.** Liveness is kept separate so a model outage never causes a restart loop of a healthy app. The model-list check catches the common "Ollama running but model not pulled / misspelled" misconfiguration before a user hits it. Fixed reason codes are testable and safe to expose.
+
+**Alternatives rejected.**
+- *A single `/health` that includes the model check*: conflates "process is broken" with "dependency is down".
+- *Reachability only*: misses a wrong or missing model until the first chat request.
+- *Probing with a tiny chat completion*: slow on CPU, consumes inference, and gives no extra information.
+
+**Consequences.** + Ollama state is visible without starting a chat. − An endpoint that lists model IDs differently from the chat `model` field would show `model_not_found`. This is a documented limitation; the fix would be configuration, not code. − FastAPI 0.143 brings in `opentelemetry-api` transitively. On its own that package is a no-op (`ProxyTracerProvider`, no exporter) and sends nothing. Real tracing comes only with ADR-008.
+
+**Verified (2026-10-08, real Ollama on host):** `/healthz` → 200; `/readyz` → 200 `ready`; with `LLM_MODEL=qwen2.5:7b-typo` → 503 `model_not_found`; with no config → exit 2 and a clear message.
 
 ---
 

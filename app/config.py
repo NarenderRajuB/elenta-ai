@@ -8,9 +8,20 @@
 # Settings are added here only when a feature needs them; .env.example must list
 # exactly the same variables (enforced by tests/test_config.py).
 
+import math
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from urllib.parse import urlsplit
+
+# Defaults for optional settings. Each is documented in .env.example and README.md.
+# Loopback by default so a local run is not exposed to the network; the container
+# sets APP_HOST=0.0.0.0 explicitly because it must accept traffic from the host.
+DEFAULT_APP_HOST = "127.0.0.1"
+DEFAULT_APP_PORT = 8000
+# Readiness probes must answer quickly; a slow model endpoint should read as
+# "not ready" rather than hang the health check.
+DEFAULT_LLM_HEALTH_TIMEOUT_SECONDS = 3.0
 
 
 class ConfigError(Exception):
@@ -29,6 +40,11 @@ class Settings:
     llm_url: str
     # Model identifier passed verbatim to the endpoint, e.g. qwen2.5:0.5b.
     llm_model: str
+    # Interface and port the HTTP server binds to.
+    app_host: str = DEFAULT_APP_HOST
+    app_port: int = DEFAULT_APP_PORT
+    # Upper bound on the readiness probe to the model endpoint (REQ-017).
+    llm_health_timeout_seconds: float = DEFAULT_LLM_HEALTH_TIMEOUT_SECONDS
 
 
 def _require(environ: Mapping[str, str], name: str, problems: list[str]) -> str:
@@ -63,6 +79,34 @@ def _validate_url(name: str, value: str, problems: list[str]) -> str:
     return value.rstrip("/")
 
 
+def _optional(environ: Mapping[str, str], name: str) -> str | None:
+    # Unset and blank are both "use the default"; blank is common when a variable
+    # is listed in an env file with no value.
+    value = environ.get(name, "").strip()
+    return value or None
+
+
+def _parse_port(name: str, raw: str, problems: list[str]) -> int:
+    # Port 0 would ask the OS for a random port, which makes the service unreachable
+    # at a documented address, so it is rejected for the server port.
+    if raw.isdigit() and 1 <= int(raw) <= 65535:
+        return int(raw)
+    problems.append(f"{name} must be a whole number from 1 to 65535")
+    return DEFAULT_APP_PORT
+
+
+def _parse_positive_seconds(name: str, raw: str, default: float, problems: list[str]) -> float:
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    # float() accepts "nan" and "inf"; neither is a usable timeout.
+    if math.isfinite(value) and value > 0:
+        return value
+    problems.append(f"{name} must be a positive number of seconds")
+    return default
+
+
 def load_settings(environ: Mapping[str, str]) -> Settings:
     """Build Settings from an environment mapping, or raise ConfigError listing all problems.
 
@@ -76,6 +120,31 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
         llm_url = _validate_url("LLM_URL", llm_url, problems)
     llm_model = _require(environ, "LLM_MODEL", problems)
 
+    app_host = _optional(environ, "APP_HOST") or DEFAULT_APP_HOST
+
+    raw_port = _optional(environ, "APP_PORT")
+    app_port = _parse_port("APP_PORT", raw_port, problems) if raw_port else DEFAULT_APP_PORT
+
+    raw_timeout = _optional(environ, "LLM_HEALTH_TIMEOUT_SECONDS")
+    health_timeout = (
+        _parse_positive_seconds(
+            "LLM_HEALTH_TIMEOUT_SECONDS", raw_timeout, DEFAULT_LLM_HEALTH_TIMEOUT_SECONDS, problems
+        )
+        if raw_timeout
+        else DEFAULT_LLM_HEALTH_TIMEOUT_SECONDS
+    )
+
     if problems:
         raise ConfigError(problems)
-    return Settings(llm_url=llm_url, llm_model=llm_model)
+    return Settings(
+        llm_url=llm_url,
+        llm_model=llm_model,
+        app_host=app_host,
+        app_port=app_port,
+        llm_health_timeout_seconds=health_timeout,
+    )
+
+
+def load_settings_from_process_env() -> Settings:
+    """The single place the real process environment is read (used by the entry point)."""
+    return load_settings(os.environ)

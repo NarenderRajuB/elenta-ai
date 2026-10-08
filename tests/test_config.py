@@ -184,3 +184,53 @@ class TestReq016FailFast:
     @pytest.mark.parametrize("port", ["0", "65535"])
     def test_edge_port_range_boundaries_accepted(self, port):
         load_settings({**VALID, "LLM_URL": f"http://host:{port}/v1"})
+
+
+# ---------------------------------------------------------------------------
+# Optional settings (APP_HOST, APP_PORT, LLM_HEALTH_TIMEOUT_SECONDS):
+# REQ-013 (from env), REQ-016 (invalid values fail fast), REQ-017 (probe timeout)
+# ---------------------------------------------------------------------------
+
+class TestOptionalSettings:
+    def test_positive_defaults_when_unset(self):
+        s = load_settings(VALID)
+        assert (s.app_host, s.app_port, s.llm_health_timeout_seconds) == ("127.0.0.1", 8000, 3.0)
+
+    def test_positive_overrides_from_env(self):
+        s = load_settings({**VALID, "APP_HOST": "0.0.0.0", "APP_PORT": "9000", "LLM_HEALTH_TIMEOUT_SECONDS": "1.5"})
+        assert (s.app_host, s.app_port, s.llm_health_timeout_seconds) == ("0.0.0.0", 9000, 1.5)
+
+    def test_positive_process_env_loader_reads_os_environ(self, monkeypatch):
+        monkeypatch.setenv("LLM_URL", VALID["LLM_URL"])
+        monkeypatch.setenv("LLM_MODEL", VALID["LLM_MODEL"])
+        monkeypatch.setenv("APP_PORT", "8123")
+        from app.config import load_settings_from_process_env
+        assert load_settings_from_process_env().app_port == 8123
+
+    @pytest.mark.parametrize("port", ["0", "65536", "-1", "abc", "8000.5", "80 80"])
+    def test_negative_invalid_app_port(self, port):
+        with pytest.raises(ConfigError, match="APP_PORT must be a whole number from 1 to 65535"):
+            load_settings({**VALID, "APP_PORT": port})
+
+    @pytest.mark.parametrize("timeout", ["0", "-1", "abc", "nan", "inf", "-inf"])
+    def test_negative_invalid_health_timeout(self, timeout):
+        with pytest.raises(ConfigError, match="LLM_HEALTH_TIMEOUT_SECONDS must be a positive number"):
+            load_settings({**VALID, "LLM_HEALTH_TIMEOUT_SECONDS": timeout})
+
+    def test_negative_optional_and_required_problems_reported_together(self):
+        with pytest.raises(ConfigError) as exc:
+            load_settings({"APP_PORT": "0", "LLM_HEALTH_TIMEOUT_SECONDS": "nan"})
+        assert len(exc.value.problems) == 4
+
+    @pytest.mark.parametrize("name", ["APP_HOST", "APP_PORT", "LLM_HEALTH_TIMEOUT_SECONDS"])
+    def test_edge_blank_optional_value_uses_default(self, name):
+        s = load_settings({**VALID, name: "   "})
+        assert s == load_settings(VALID)
+
+    @pytest.mark.parametrize("port, expected", [("1", 1), ("65535", 65535), (" 8080 ", 8080)])
+    def test_edge_app_port_boundaries_and_whitespace(self, port, expected):
+        assert load_settings({**VALID, "APP_PORT": port}).app_port == expected
+
+    @pytest.mark.parametrize("timeout, expected", [("0.001", 0.001), ("10", 10.0), ("1e1", 10.0)])
+    def test_edge_health_timeout_small_and_scientific(self, timeout, expected):
+        assert load_settings({**VALID, "LLM_HEALTH_TIMEOUT_SECONDS": timeout}).llm_health_timeout_seconds == expected

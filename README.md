@@ -32,6 +32,7 @@ The full operator guide (architecture, setup, configuration, operations, securit
 | Evidence selection | 800-char chunks, BM25 keyword ranking, 1500-token evidence budget, tokens estimated as chars/4 | ADR-007 |
 | Chat transport | `POST /chat` streams Server-Sent Events; one terminal `done` or `error` event | ADR-004 |
 | Browser UI | Static HTML/JS/CSS, text-only rendering, strict CSP; no Streamlit (ADR-017) | ADR-010 |
+| Observability | OpenTelemetry trace per request (trace id = request id) → local Jaeger; JSON logs with the request id | ADR-008 |
 | Prompt and output safety | Fixed system instructions; evidence in delimited, neutralised blocks; leak and reasoning filter on output; no execution of document text | ADR-006 |
 
 ## Prerequisites (so far)
@@ -81,6 +82,40 @@ Exactly one terminal event (`done` or `error`) ends every stream.
 | `internal_error` | Unexpected bug; logged with the request id |
 
 If the client disconnects, the server stops the model call (no work continues in the background).
+
+## Logs and traces (observability)
+
+Start the stack (`docker compose up -d --build`), ask a question in the UI, and copy the **request id** shown under the answer. That id is also the **trace id**.
+
+**Trace viewer (Jaeger):** open http://127.0.0.1:16686. Either paste the id into the "Lookup by Trace ID" box at the top, or go straight to `http://127.0.0.1:16686/trace/<request id>`. Spans appear about a second after the answer finishes. Traces are kept in memory and are lost when the `jaeger` container restarts.
+
+Each chat request is **one trace**:
+
+| Span | What it records |
+|---|---|
+| `chat.request` (root) | request id, outcome (`stop`, `insufficient_evidence`, an error code, or `client_disconnected`), model called, total ms |
+| `corpus.refresh` | corpus version, documents, added/modified/removed/unchanged, skipped files with reason |
+| `evidence.selection` | selected chunk ids and files, candidates, budget, used and dropped tokens, truncation, insufficient reason |
+| `prompt.assembly` | estimated prompt tokens and the limit, number of evidence chunks |
+| `inference.stream` | model, temperature, max tokens, first-token time, prompt/completion tokens with source (`reported` or `estimated (chars/4)`), finish reason, guard results; error code on failure |
+
+Span durations give per-stage latency. No question text, prompt or document content is ever recorded.
+
+**Logs:** one JSON object per line.
+
+```bash
+docker compose logs -f app                                   # everything, live
+docker compose logs --no-log-prefix app | grep <request id>   # one request, all modules
+```
+
+```json
+{"ts": "...", "level": "INFO", "logger": "app.chat", "message": "chat start", "request_id": "8dbc…ed", "question_chars": 30}
+{"ts": "...", "level": "INFO", "logger": "app.corpus", "message": "corpus refreshed: version=1 documents=2 …", "request_id": "8dbc…ed"}
+{"ts": "...", "level": "INFO", "logger": "app.chat", "message": "evidence selected", "request_id": "8dbc…ed", "chunk_ids": ["leave.md#0:00960ef0"], "used_tokens": 10, "dropped_chunks": 0}
+{"ts": "...", "level": "INFO", "logger": "app.chat", "message": "chat end", "request_id": "8dbc…ed", "outcome": "stop", "total_ms": 5817.5, "timings_ms": {…}}
+```
+
+Streamed `error` events carry the same `request_id`.
 
 ## Ollama setup
 
@@ -178,7 +213,7 @@ Run a single requirement's tests, for example:
 uv run pytest -v tests/test_config.py::TestReq016FailFast
 ```
 
-Current result: **490 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Dev-only dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
+Current result: **522 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Dev-only dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
 
 ## Configuration
 
@@ -203,6 +238,7 @@ All configuration is via environment variables (REQ-013). [`.env.example`](.env.
 | `LLM_CONNECT_TIMEOUT_SECONDS` | No (default `5`) | `5` | Max time to connect to the model server. |
 | `LLM_READ_TIMEOUT_SECONDS` | No (default `60`) | `60` | Max wait for the next streamed piece, including the first (prompt processing on CPU). |
 | `LLM_REQUEST_TIMEOUT_SECONDS` | No (default `180`) | `180` | Hard cap on one model call (checked per piece). |
+| `OTLP_TRACES_URL` | No (default empty) | `http://jaeger:4318/v1/traces` | OTLP/HTTP endpoint of a **local** trace collector. Set by Compose. Empty: traces are created (ids still used) but not exported. |
 | `SELECTION_MIN_SCORE` | No (default `0`) | `0` | BM25 score a chunk must exceed to count as evidence. `0` = shares at least one meaningful word with the question. |
 
 A blank optional value means "use the default".
@@ -758,6 +794,63 @@ Tests: `tests/test_config.py::TestInferenceTimeouts`
 | ❌ | `0`, `-1`, `abc`, `nan`, `inf` | "must be a positive number of seconds" |
 | ⚠️ | `0.01`; blank | Accepted; default |
 
+### REQ-080 / REQ-081: One trace per request with a span per stage
+Code: `app/observability.py`, `app/chat.py` · Tests: `tests/test_observability.py::TestTraceStructure`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | One chat request | One trace id across all spans; root + 4 stage spans, each a child of the root |
+| ✅ | Request id in `meta` | Equals the trace id |
+| ✅ | Stage order | refresh → selection → prompt → inference (by start time) |
+| ❌ | Two requests | Two separate traces |
+| ⚠️ | No evidence | Only root, refresh and selection spans; `model_called: false` |
+| ⚠️ | **Live (Compose):** one question | 5 spans in Jaeger within 2 s |
+
+### REQ-083 / REQ-084: Latency, labelled token counts, chunk ids, no content
+Tests: `tests/test_observability.py::TestSpanContent`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | Endpoint reports usage | `llm.prompt_tokens`/`completion_tokens` with `token_count_source: reported` |
+| ✅ | No usage reported | `estimated (chars/4)`; prompt span labels its estimate method |
+| ✅ | Selected chunks | `selection.chunk_ids` equal the `sources` event |
+| ✅ | Every span | Has a duration |
+| ❌ | Marker strings in the question and document | Appear in no span attribute or event |
+| ⚠️ | Corrupt file | Listed on `corpus.refresh` as `bad.txt:not_utf8` |
+
+### Failure paths in traces (REQ-076 / REQ-033)
+Tests: `tests/test_observability.py::TestFailureTraces`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ❌ | Model unavailable | `inference.stream` and root have status ERROR, `error.code: model_unavailable`; `error` event id = trace id |
+| ❌ | Prompt too large | `prompt.assembly` has `error.code: question_too_long`; no inference span |
+| ⚠️ | Client disconnects mid-answer | Every span still ended; root outcome `client_disconnected` |
+
+### REQ-082 / REQ-068: Structured logs with the request id
+Tests: `tests/test_observability.py::TestJsonLogs`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | Any log record | One JSON line with ts, level, logger, message, extra fields |
+| ✅ | During a request | `request_id` present: chat start, corpus refreshed, evidence selected, chat end all share it |
+| ❌ | Question and document markers | Never in any log line |
+| ❌ | Outside a request | No `request_id` |
+| ⚠️ | Non-JSON-able extra value; exception | Stringified; traceback in `exception` |
+| ⚠️ | httpx | INFO silenced (TS-007) |
+
+### REQ-085 / REQ-012: Local tooling only
+Tests: `tests/test_observability.py::TestExporterConfig`, `tests/test_container_config.py`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | `HTTP_PROXY` pointed at a dead port | Span still delivered directly to the local collector (fails if `trust_env` is on) |
+| ✅ | Compose | App exports to `http://jaeger:4318/v1/traces`; Jaeger image pinned by digest |
+| ❌ | Ports | Only the Jaeger UI, on `127.0.0.1:16686`; OTLP not published |
+| ❌ | No `OTLP_TRACES_URL` | No exporter |
+| ⚠️ | `OTLP_TRACES_URL` = `ftp://x` / `jaeger:4318` | Config error |
+| ⚠️ | Jaeger container | `cap_drop: ALL`, `no-new-privileges` |
+
 ### REQ-091: Every source file opens with a header comment block
 Tests: `tests/test_file_headers.py`
 
@@ -783,7 +876,8 @@ app/
   inference.py       OpenAI-compatible streaming client, failure codes, timeouts (ADR-002)
   ingestion.py       safe file discovery and reading under the corpus root
   health.py          model endpoint readiness probe (REQ-017)
-  main.py            FastAPI app factory, /healthz and /readyz (REQ-017)
+  main.py            FastAPI app factory: /, /chat, /healthz, /readyz
+  observability.py   JSON logging, request-id context, tracer provider + OTLP exporter (ADR-008)
   output_guard.py    streamed-output filter: reasoning removal, instruction-leak block (ADR-006)
   prompt.py          system instructions, evidence blocks, context check (ADR-006)
   selection.py       ranking + token budget -> evidence for one question
@@ -800,6 +894,7 @@ tests/
   test_chat.py       /chat pipeline, framing, failures, validation, disconnect
   test_streaming_e2e.py  real sockets: progressive streaming, disconnect cancels model
   test_ui.py         browser UI safety: no HTML sinks, CSP, no external resources
+  test_observability.py  trace structure, span content, failure traces, JSON logs, exporter
   test_no_execution.py  static scan: no eval/exec/shell/templates in app/
   test_container_config.py   static checks of compose.yaml / Dockerfile
   test_container_runtime.py  real containers (-m container)
@@ -812,7 +907,7 @@ scripts/
   eval_injection.py  repeatable prompt-injection evaluation against a live model
 .env.example         configuration reference
 Dockerfile           two-stage image build (pinned base, non-root)
-compose.yaml         single-command startup
+compose.yaml         single-command startup: app + local Jaeger trace viewer
 .dockerignore        keeps .env, data/, tests/ out of the image
 pyproject.toml       project metadata, pytest settings
 uv.lock              pinned dependency versions

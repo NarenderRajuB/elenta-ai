@@ -19,6 +19,7 @@ from app.config import load_settings
 from app.corpus import Corpus
 from app.index import IndexCache
 from app.main import MAX_QUESTION_CHARS, create_app
+from app.observability import build_tracer_provider
 from app.output_guard import REFUSAL
 from app.prompt import SYSTEM_PROMPT
 
@@ -293,7 +294,8 @@ def test_edge_closing_the_event_stream_closes_the_model_call(tmp_path):
     async def main():
         transport = httpx.MockTransport(lambda r: httpx.Response(200, stream=stream))
         async with httpx.AsyncClient(transport=transport) as client:
-            deps = ChatDeps(settings, Corpus(str(tmp_path), 10**6, 500, 0.0), IndexCache(800), client)
+            deps = ChatDeps(settings, Corpus(str(tmp_path), 10**6, 500, 0.0), IndexCache(800), client,
+                            build_tracer_provider(None).get_tracer("test"))
             gen = answer("annual leave", deps)
             async for event in gen:
                 if event["event"] == "token":

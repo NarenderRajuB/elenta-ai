@@ -115,3 +115,31 @@ def test_edge_host_gateway_alias_for_native_linux(app_service):
 
 def test_edge_tmpfs_is_the_only_writable_path(app_service):
     assert app_service["tmpfs"] == ["/tmp"]
+
+
+# --- Trace viewer (ADR-008, REQ-085, REQ-012) ----------------------------------------
+
+@pytest.fixture(scope="module")
+def jaeger_service() -> dict:
+    result = subprocess.run(["docker", "compose", "config", "--format", "json"], cwd=ROOT,
+                            env={**os.environ, "LLM_URL": "http://h/v1", "LLM_MODEL": "m"},
+                            capture_output=True, text=True, timeout=60)
+    return json.loads(result.stdout)["services"]["jaeger"]
+
+
+def test_positive_app_exports_traces_to_local_jaeger(app_service):
+    assert app_service["environment"]["OTLP_TRACES_URL"] == "http://jaeger:4318/v1/traces"
+    assert "jaeger" in app_service["depends_on"]
+
+
+def test_positive_jaeger_image_pinned_by_digest(jaeger_service):
+    assert jaeger_service["image"].startswith("jaegertracing/jaeger:2.11.0@sha256:")
+
+
+def test_negative_jaeger_ui_only_on_loopback_and_otlp_not_published(jaeger_service):
+    published = {(p.get("host_ip"), int(p["target"])) for p in jaeger_service["ports"]}
+    assert published == {("127.0.0.1", 16686)}
+
+
+def test_edge_jaeger_hardening(jaeger_service):
+    assert jaeger_service["cap_drop"] == ["ALL"] and "no-new-privileges:true" in jaeger_service["security_opt"]

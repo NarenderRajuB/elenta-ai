@@ -12,6 +12,7 @@ import uvicorn
 
 from app.config import ConfigError, load_settings_from_process_env
 from app.main import create_app
+from app.observability import configure_logging
 from app.prompt import fixed_overhead_tokens, prompt_limit
 
 # Distinct from 1 (generic crash) so scripts and logs can tell "bad config" apart.
@@ -53,14 +54,12 @@ def main() -> int:
         )
         return EXIT_CONFIG_ERROR
 
-    # Plain-text logs to stderr for now; structured JSON logging arrives with the
-    # observability feature (REQ-082).
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-    # httpx logs every request URL at INFO. LLM_URL could carry credentials, and our own
-    # logs already record each model call by request id, so only its warnings are kept.
-    logging.getLogger("httpx").setLevel(logging.WARNING)
+    # Structured JSON logs on stderr for every logger, including uvicorn's (ADR-008).
+    configure_logging(logging.INFO)
 
-    uvicorn.run(create_app(settings), host=settings.app_host, port=settings.app_port)
+    # log_config=None: keep uvicorn from installing its own text handlers, so its
+    # records go through the JSON handler above.
+    uvicorn.run(create_app(settings), host=settings.app_host, port=settings.app_port, log_config=None)
     return 0
 
 

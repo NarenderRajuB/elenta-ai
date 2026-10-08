@@ -60,7 +60,9 @@ def _start(env: dict[str, str]) -> str:
     """Start the app service detached via compose run; return the container name."""
     name = f"{PROJECT}-{uuid.uuid4().hex[:8]}"
     env_args = [arg for k, v in env.items() for arg in ("-e", f"{k}={v}")]
-    result = _compose("run", "-d", "--name", name, *env_args, "app")
+    # --no-deps: don't start Jaeger, whose published UI port would clash with a stack
+    # the developer already has running. Trace export failures are non-fatal.
+    result = _compose("run", "-d", "--no-deps", "--name", name, *env_args, "app")
     assert result.returncode == 0, result.stderr
     return name
 
@@ -203,7 +205,7 @@ def test_positive_startup_log_reports_corpus(running):
 # --- Negative --------------------------------------------------------------------
 
 def test_negative_missing_config_exits_2_with_clear_message():
-    result = _compose("run", "--rm", "-e", "LLM_URL=", "-e", "LLM_MODEL=", "app")
+    result = _compose("run", "--rm", "--no-deps", "-e", "LLM_URL=", "-e", "LLM_MODEL=", "app")
     assert result.returncode == 2
     output = result.stdout + result.stderr
     assert "LLM_URL is required" in output and "LLM_MODEL is required" in output

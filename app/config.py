@@ -94,6 +94,9 @@ class Settings:
     llm_connect_timeout_seconds: float = DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
     llm_read_timeout_seconds: float = DEFAULT_LLM_READ_TIMEOUT_SECONDS
     llm_request_timeout_seconds: float = DEFAULT_LLM_REQUEST_TIMEOUT_SECONDS
+    # OTLP/HTTP endpoint of a local trace collector, e.g. http://jaeger:4318/v1/traces.
+    # Unset: traces are still created (their ids are the request ids) but not exported.
+    otlp_traces_url: str | None = None
 
 
 def _require(environ: Mapping[str, str], name: str, problems: list[str]) -> str:
@@ -263,6 +266,12 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
     read_timeout = optional_seconds("LLM_READ_TIMEOUT_SECONDS", DEFAULT_LLM_READ_TIMEOUT_SECONDS)
     request_timeout = optional_seconds("LLM_REQUEST_TIMEOUT_SECONDS", DEFAULT_LLM_REQUEST_TIMEOUT_SECONDS)
 
+    # Validated like LLM_URL, but kept as given: this is a full URL including its path.
+    otlp_traces_url = _optional(environ, "OTLP_TRACES_URL")
+    if otlp_traces_url:
+        checked = _validate_url("OTLP_TRACES_URL", otlp_traces_url, problems)
+        otlp_traces_url = checked if checked else otlp_traces_url
+
     if problems:
         raise ConfigError(problems)
     return Settings(
@@ -284,6 +293,7 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
         llm_connect_timeout_seconds=connect_timeout,
         llm_read_timeout_seconds=read_timeout,
         llm_request_timeout_seconds=request_timeout,
+        otlp_traces_url=otlp_traces_url,
     )
 
 

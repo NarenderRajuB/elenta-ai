@@ -22,6 +22,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from opentelemetry.sdk.trace.export import SpanExporter
 from pydantic import BaseModel, Field
 
 from app.chat import ChatDeps, answer
@@ -29,6 +30,7 @@ from app.config import Settings
 from app.corpus import Corpus
 from app.health import check_llm
 from app.index import IndexCache
+from app.observability import build_tracer_provider
 from app.sse import SSE_HEADERS, frame
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -51,8 +53,13 @@ class ChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=MAX_QUESTION_CHARS)
 
 
-def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
-    """Build the app. `transport` lets tests replace the network with a fake endpoint."""
+def create_app(
+    settings: Settings,
+    transport: httpx.AsyncBaseTransport | None = None,
+    span_exporter: SpanExporter | None = None,
+) -> FastAPI:
+    """Build the app. Tests can replace the model endpoint (`transport`) and capture
+    spans in memory (`span_exporter`)."""
 
     corpus = Corpus(
         root=settings.corpus_dir,
@@ -61,6 +68,8 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
         settle_seconds=settings.corpus_settle_seconds,
     )
     index_cache = IndexCache(settings.chunk_max_chars)
+    tracer_provider = build_tracer_provider(settings.otlp_traces_url, span_exporter)
+    tracer = tracer_provider.get_tracer("app.chat")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -73,8 +82,11 @@ def create_app(settings: Settings, transport: httpx.AsyncBaseTransport | None = 
         # the configured LLM_URL is the only outbound destination (REQ-012, REQ-022).
         async with httpx.AsyncClient(trust_env=False, transport=transport) as client:
             app.state.http_client = client
-            app.state.chat_deps = ChatDeps(settings, corpus, index_cache, client)
+            app.state.chat_deps = ChatDeps(settings, corpus, index_cache, client, tracer)
+            app.state.tracer_provider = tracer_provider
             yield
+        # Flush spans still queued for export before the process exits.
+        tracer_provider.shutdown()
 
     # No interactive API docs: they load scripts from a CDN, which breaks offline
     # operation (REQ-012) and the Content-Security-Policy.

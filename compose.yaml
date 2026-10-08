@@ -24,6 +24,8 @@ services:
       CORPUS_MAX_FILE_BYTES: ${CORPUS_MAX_FILE_BYTES:-}
       CORPUS_MAX_FILES: ${CORPUS_MAX_FILES:-}
       CORPUS_SETTLE_SECONDS: ${CORPUS_SETTLE_SECONDS:-}
+      # Traces go to the bundled local Jaeger over the Compose network (ADR-008, REQ-085).
+      OTLP_TRACES_URL: http://jaeger:4318/v1/traces
     ports:
       # Published on host loopback only: reachable from this machine, not the LAN.
       - "127.0.0.1:8000:8000"
@@ -43,6 +45,8 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    depends_on:
+      - jaeger
     healthcheck:
       # Liveness only (ADR-015): a model outage must not mark the app unhealthy.
       # The slim image has no curl, so Python's standard library is used.
@@ -51,3 +55,16 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
+
+  # Local trace viewer (ADR-008): receives OTLP/HTTP on 4318 inside the Compose network
+  # only, and serves its UI on host loopback. Spans are kept in memory: they are lost
+  # when this container restarts (documented limitation). Image pinned by digest so the
+  # offline setup is repeatable.
+  jaeger:
+    image: jaegertracing/jaeger:2.11.0@sha256:b585df1b6299bbbd16bf7c679da30389349736e4b6bc8f4f500142a75bf26ca8
+    ports:
+      - "127.0.0.1:16686:16686"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

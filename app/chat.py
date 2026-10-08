@@ -15,8 +15,14 @@
 #   - sources come from selection, not from model text (ADR-006 C3)
 #   - prompt too large: rejected, never silently truncated (REQ-055)
 #
-# Logs carry the request id, stage timings and counts, never the question text, the
-# prompt or document content (REQ-068).
+# Observability (ADR-008, REQ-080..084): one trace per request. The root span
+# `chat.request` has a child span per stage: `corpus.refresh`, `evidence.selection`,
+# `prompt.assembly`, `inference.stream`. The trace id is the request id, shown to the
+# user, carried on every event and log line. Spans record counts, timings, chunk ids
+# and token counts (labelled reported/estimated), never the question, the prompt or
+# document text (REQ-068). Spans are started and ended explicitly instead of being made
+# "current", because a context attached inside an async generator cannot be detached
+# safely once the generator is closed from another task (client disconnect).
 
 import logging
 import time
@@ -26,11 +32,14 @@ from dataclasses import dataclass
 
 import anyio
 import httpx
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode, Tracer
 
 from app.config import Settings
 from app.corpus import Corpus
 from app.index import IndexCache
 from app.inference import Finish, InferenceError, TextDelta, Usage, stream_chat
+from app.observability import REQUEST_ID
 from app.output_guard import REFUSAL, OutputGuard
 from app.prompt import PromptTooLarge, assemble
 from app.selection import select
@@ -61,6 +70,7 @@ class ChatDeps:
     corpus: Corpus
     index_cache: IndexCache
     http_client: httpx.AsyncClient
+    tracer: Tracer
 
 
 def _ms(start: float) -> float:
@@ -72,25 +82,72 @@ def _error(request_id: str, code: str, partial: bool) -> dict:
                                        "message": ERROR_MESSAGES[code], "partial": partial}}
 
 
-async def answer(question: str, deps: ChatDeps, request_id: str | None = None) -> AsyncIterator[dict]:
+def _request_id(span: trace.Span) -> str:
+    ctx = span.get_span_context()
+    # A non-recording tracer has no trace id; fall back so ids are always unique.
+    return format(ctx.trace_id, "032x") if ctx.is_valid else uuid.uuid4().hex
+
+
+async def answer(question: str, deps: ChatDeps) -> AsyncIterator[dict]:
     s = deps.settings
-    request_id = request_id or uuid.uuid4().hex
+    tracer = deps.tracer
+    root = tracer.start_span("chat.request", attributes={"chat.question_chars": len(question)})
+    parent = trace.set_span_in_context(root)
+    request_id = _request_id(root)
+    root.set_attribute("chat.request_id", request_id)
+    id_token = REQUEST_ID.set(request_id)
     timings: dict[str, float] = {}
     started_at = time.perf_counter()
     outcome = "client_disconnected"  # overwritten on every normal or error exit
-    log.info("chat start: request_id=%s question_chars=%d", request_id, len(question))
+    open_spans: list[trace.Span] = []
+
+    def stage(name: str) -> trace.Span:
+        span = tracer.start_span(name, context=parent)
+        open_spans.append(span)
+        return span
+
+    def end(span: trace.Span, error_code: str | None = None) -> None:
+        if error_code:
+            span.set_status(Status(StatusCode.ERROR, error_code))
+            span.set_attribute("error.code", error_code)
+        span.end()
+        open_spans.remove(span)
+
+    log.info("chat start", extra={"question_chars": len(question)})
     try:
         yield {"event": "meta", "data": {"request_id": request_id}}
 
         # Blocking file I/O and CPU-bound indexing run in a worker thread.
+        span = stage("corpus.refresh")
         t = time.perf_counter()
         snapshot = await anyio.to_thread.run_sync(deps.corpus.refresh)
         timings["corpus_refresh_ms"] = _ms(t)
+        st = snapshot.stats
+        span.set_attributes({"corpus.version": snapshot.version, "corpus.documents": len(snapshot.documents),
+                             "corpus.added": st.added, "corpus.modified": st.modified, "corpus.removed": st.removed,
+                             "corpus.unchanged": st.unchanged, "corpus.skipped": st.skipped,
+                             "corpus.skipped_errors": [f"{k.rel_path}:{k.reason}" for k in snapshot.skips if k.severity == "error"]})
+        end(span)
 
+        span = stage("evidence.selection")
         t = time.perf_counter()
         index = await anyio.to_thread.run_sync(deps.index_cache.get, snapshot)
         selection = select(index, question, s.context_token_budget, s.selection_min_score)
         timings["selection_ms"] = _ms(t)
+        span.set_attributes({
+            "selection.index_chunks": len(index), "selection.query_terms": len(selection.query_terms),
+            "selection.candidates": selection.candidates_considered,
+            "selection.chunk_ids": [c.chunk_id for c in selection.chunks],
+            "selection.files": list(selection.source_files),
+            "selection.budget_tokens": selection.budget_tokens, "selection.used_tokens": selection.used_tokens,
+            "selection.dropped_chunks": selection.dropped_count, "selection.truncated": selection.truncated,
+            "selection.token_count_method": TOKEN_METHOD,
+            "selection.insufficient_reason": selection.insufficient_reason or "",
+        })
+        end(span)
+        log.info("evidence selected", extra={"chunk_ids": [c.chunk_id for c in selection.chunks],
+                                             "used_tokens": selection.used_tokens, "dropped_chunks": selection.dropped_count,
+                                             "insufficient_reason": selection.insufficient_reason})
 
         yield {"event": "sources", "data": {
             "request_id": request_id,
@@ -113,23 +170,35 @@ async def answer(question: str, deps: ChatDeps, request_id: str | None = None) -
             text = INSUFFICIENT_REPLIES[selection.insufficient_reason]
             yield {"event": "token", "data": {"text": text}}
             outcome = "insufficient_evidence"
+            root.set_attribute("chat.model_called", False)
             yield {"event": "done", "data": {"request_id": request_id, "finish_reason": outcome,
                                              "model_called": False, "timings_ms": timings}}
             return
 
+        span = stage("prompt.assembly")
         t = time.perf_counter()
         try:
             prompt = assemble(question, selection, s.llm_context_tokens, s.llm_max_tokens)
-        except PromptTooLarge:
+        except PromptTooLarge as exc:
+            span.set_attributes({"prompt.estimated_tokens": exc.prompt_tokens, "prompt.limit_tokens": exc.limit})
+            end(span, "question_too_long")
             outcome = "question_too_long"
             yield _error(request_id, outcome, partial=False)
             return
         timings["prompt_assembly_ms"] = _ms(t)
+        span.set_attributes({"prompt.estimated_tokens": prompt.estimated_prompt_tokens,
+                             "prompt.limit_tokens": s.llm_context_tokens - s.llm_max_tokens,
+                             "prompt.evidence_chunks": len(prompt.evidence_chunk_ids),
+                             "prompt.token_count_method": TOKEN_METHOD})
+        end(span)
 
         guard = OutputGuard(prompt.messages[0]["content"])
         usage: Usage | None = None
         finish_reason = "unknown"
         emitted_chars = 0
+        span = stage("inference.stream")
+        span.set_attributes({"llm.model": s.llm_model, "llm.temperature": s.llm_temperature, "llm.max_tokens": s.llm_max_tokens})
+        root.set_attribute("chat.model_called", True)
         t = time.perf_counter()
         try:
             async for item in stream_chat(
@@ -145,6 +214,7 @@ async def answer(question: str, deps: ChatDeps, request_id: str | None = None) -
                     if released:
                         if "first_token_ms" not in timings:
                             timings["first_token_ms"] = _ms(started_at)
+                            span.add_event("first_token")
                         emitted_chars += len(released)
                         yield {"event": "token", "data": {"text": released}}
                 elif isinstance(item, Usage):
@@ -153,14 +223,17 @@ async def answer(question: str, deps: ChatDeps, request_id: str | None = None) -
                     finish_reason = item.reason
         except InferenceError as exc:
             timings["inference_ms"] = _ms(t)
+            span.set_attribute("llm.partial", emitted_chars > 0)
+            end(span, exc.code)
             outcome = exc.code
+            log.warning("model call failed", extra={"code": exc.code, "partial": emitted_chars > 0})
             yield _error(request_id, exc.code, partial=emitted_chars > 0)
             return
         timings["inference_ms"] = _ms(t)
 
         if guard.blocked:
             outcome = "instruction_leak_blocked"
-            log.warning("output guard blocked instruction leak: request_id=%s", request_id)
+            log.warning("output guard blocked instruction leak")
             yield {"event": "refusal", "data": {"text": REFUSAL}}
         else:
             tail = guard.finish()
@@ -169,7 +242,7 @@ async def answer(question: str, deps: ChatDeps, request_id: str | None = None) -
                 yield {"event": "token", "data": {"text": tail}}
             outcome = finish_reason
         if guard.events.reasoning_removed:
-            log.info("output guard removed reasoning: request_id=%s blocks=%d", request_id, guard.events.reasoning_removed)
+            log.info("output guard removed reasoning", extra={"blocks": guard.events.reasoning_removed})
 
         # Token counts: reported by the endpoint when available, otherwise estimated
         # with the documented method; always labelled (REQ-083).
@@ -178,6 +251,13 @@ async def answer(question: str, deps: ChatDeps, request_id: str | None = None) -
         else:
             tokens = {"prompt": prompt.estimated_prompt_tokens, "completion": estimate_tokens("x" * emitted_chars),
                       "source": f"estimated ({TOKEN_METHOD})"}
+        span.set_attributes({
+            "llm.finish_reason": outcome, "llm.prompt_tokens": tokens["prompt"],
+            "llm.completion_tokens": tokens["completion"], "llm.token_count_source": tokens["source"],
+            "llm.first_token_ms": timings.get("first_token_ms", -1.0), "llm.answer_chars": emitted_chars,
+            "guard.reasoning_blocks_removed": guard.events.reasoning_removed, "guard.leak_blocked": guard.blocked,
+        })
+        end(span)
         yield {"event": "done", "data": {
             "request_id": request_id, "finish_reason": outcome, "model_called": True,
             "tokens": tokens, "prompt_tokens_estimated": prompt.estimated_prompt_tokens,
@@ -185,11 +265,23 @@ async def answer(question: str, deps: ChatDeps, request_id: str | None = None) -
         }}
     except Exception:
         # Unexpected bug: still end the stream with a terminal event carrying the id.
-        log.exception("chat failed: request_id=%s", request_id)
+        log.exception("chat failed")
         outcome = "internal_error"
         yield _error(request_id, outcome, partial=False)
     finally:
-        # Runs on normal completion, on errors and when the client disconnects
-        # (the generator is closed; outcome stays "client_disconnected").
-        log.info("chat end: request_id=%s outcome=%s total_ms=%.1f timings=%s",
-                 request_id, outcome, _ms(started_at), timings)
+        # Runs on normal completion, on errors and when the client disconnects (the
+        # generator is closed; outcome stays "client_disconnected"). Every span is
+        # ended so a cut-off request still appears as a complete trace.
+        for span in list(open_spans):
+            end(span, outcome if outcome == "client_disconnected" else None)
+        total_ms = _ms(started_at)
+        root.set_attributes({"chat.outcome": outcome, "chat.total_ms": total_ms})
+        if outcome in ERROR_MESSAGES or outcome == "client_disconnected":
+            root.set_status(Status(StatusCode.ERROR, outcome))
+        root.end()
+        log.info("chat end", extra={"outcome": outcome, "total_ms": total_ms, "timings_ms": timings})
+        try:
+            REQUEST_ID.reset(id_token)
+        except ValueError:
+            # Closed from a different context (client disconnect): nothing to restore.
+            pass

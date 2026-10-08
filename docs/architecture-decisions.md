@@ -4,7 +4,7 @@ Decision log required by brief §5.11 (REQ-110, REQ-112). Entries are appended *
 
 **Statuses**: `Proposed` (drafted, awaiting candidate acceptance) · `Accepted` · `Superseded` · `Rejected`.
 
-> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-002, ADR-004, ADR-005, ADR-006, ADR-007, ADR-010, ADR-011, ADR-012, ADR-013 (model superseded), ADR-014, ADR-015, ADR-016. Rejected: ADR-003.
+> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-002, ADR-004, ADR-005, ADR-006, ADR-007, ADR-008, ADR-010, ADR-011, ADR-012, ADR-013 (model superseded), ADR-014, ADR-015, ADR-016. Rejected: ADR-003.
 
 Template:
 
@@ -236,7 +236,7 @@ Template:
 
 ## ADR-008: OpenTelemetry tracing exported to a local Jaeger container; JSON logs to stdout
 
-- **Status:** Proposed · **Date:** 2026-10-08
+- **Status:** Accepted by the candidate on 2026-10-08 · **Date:** 2026-10-08
 - **Requirements:** REQ-004, REQ-080 – REQ-085, REQ-012, REQ-068
 
 **Context.** One trace per request, stage spans, token counts, local tooling only, and a trace the reviewer can open live (§5.8, §7.9).
@@ -252,6 +252,17 @@ Template:
 
 **Consequences.** + Real trace UI for the demo. − Adds one container image that must be pulled before going offline (document in Setup). − Jaeger in-memory storage loses traces on restart (documented limitation). **Needs candidate confirmation** as it adds a runtime component.
 
+
+**Implementation (2026-10-08).** `app/observability.py`, instrumentation in `app/chat.py`, Jaeger service in `compose.yaml`.
+- **Dependencies:** `opentelemetry-sdk` and `opentelemetry-exporter-otlp-proto-http` 1.45.1. OTLP over **HTTP** (port 4318), not gRPC, to avoid the large `grpcio` dependency. The exporter uses `requests` with `trust_env=False`, proven by a test that sets `HTTP_PROXY` to a dead port and still receives the span.
+- **Viewer:** `jaegertracing/jaeger:2.11.0` pinned by digest (`sha256:b585df1b…`), 173 MB. UI on `127.0.0.1:16686`; OTLP 4318 reachable only on the Compose network. In-memory storage, so traces are lost when Jaeger restarts.
+- **No `OTEL_*` environment variables are used:** resource, sampler (`ALWAYS_ON`), span limits and endpoint are passed explicitly (REQ-013). One `TracerProvider` per app instance, not the global, so tests capture spans with `InMemorySpanExporter`.
+- **Trace = request:** root `chat.request` with children `corpus.refresh`, `evidence.selection`, `prompt.assembly`, `inference.stream`. **The trace id is the request id** shown in the UI, in every event and in every log line. Spans are started and ended explicitly (never made "current") because a context attached inside an async generator can't be detached safely after a client disconnect; every span is ended in `finally`.
+- **Attributes:** counts, timings, chunk ids, budget, model name, labelled token counts (`reported` / `estimated (chars/4)`), guard results, error codes. **Never** the question, prompt or document text (tested with marker strings).
+- **Logs:** JSON lines to stderr for every logger including uvicorn (`log_config=None`). `request_id` comes from a context variable that `anyio.to_thread` copies into worker threads, so corpus/index logs carry it too. httpx INFO stays silenced (TS-007).
+- **Export interval:** 1 s (SDK default 5 s), so a trace can be opened right after the answer during the demo.
+
+**Verified live (2026-10-08, Compose + gemma3:1b):** one request gives 5 spans in Jaeger with correct parent links, stage durations (e.g. inference 5,809 ms, first token 5,741 ms), reported token counts 445/4 vs 415 estimated, and selected chunk ids matching the UI's sources.
 ---
 
 ## ADR-009: Conflict handling — no automatic precedence; surface conflicts with named sources

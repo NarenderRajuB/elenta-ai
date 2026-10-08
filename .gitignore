@@ -3,3 +3,9 @@
 
 # Assessment brief (employer document, not for the public repo)
 docs/ELENTA_Candidate_Assesment.pdf
+
+# Local environment and Python artefacts
+.env
+.venv/
+__pycache__/
+.pytest_cache/

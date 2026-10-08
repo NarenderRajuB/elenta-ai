@@ -41,3 +41,30 @@ Using Ollama as the OpenAI-compatible local endpoint, as the brief §5.2 permits
 **Remaining limitation.**
 - The DMR path cannot be demonstrated on this machine. Docs must state this honestly.
 - Ollama sets its effective context window server-side, so there is a risk of silent truncation if our prompt exceeds it (see ADR-013 consequences).
+
+---
+
+## TS-002: LLM_URL validation accepted invalid ports and query/fragment parts
+
+- **Date:** 2026-10-08
+- **Phase:** Feature 1 (configuration), while writing edge-case tests
+- **Related:** REQ-016, ADR-011, `app/config.py`
+
+**Symptom.** Probing `load_settings` with edge-case URLs showed these were all accepted as valid:
+```
+'http://host:99999/v1' -> ACCEPTED
+'http://host:abc/v1'   -> ACCEPTED
+'http://h/v1?x=1'      -> ACCEPTED
+'http://h/v1#frag'     -> ACCEPTED
+```
+
+**Diagnosis.**
+- `urllib.parse.urlsplit` parses lazily. `.hostname` is set even when the port is garbage, and the port is only validated when `.port` is accessed (it raises `ValueError`). The original check only looked at scheme and hostname.
+- The inference client will build request URLs by appending `/chat/completions` to `LLM_URL`. With a query string or fragment present, the path would land after `?…` or `#…` and produce a wrong URL.
+- In both cases the service would start and then fail at the first chat request, which breaks the "fail fast" requirement (REQ-016).
+
+**Attempted actions.** Wrote a probe script over 8 edge-case URLs. Upper-case scheme, IPv6 host and repeated trailing slashes already behaved correctly (`urlsplit` lower-cases the scheme).
+
+**Resolution.** `_validate_url` now reads `parts.port` inside `try/except ValueError`, and rejects URLs with a query string or fragment. Each case gets its own clear error message. Regression tests were added in `tests/test_config.py`.
+
+**Remaining limitation.** Validation checks only that the URL is well-formed, not that it is reachable. Reachability is the job of the readiness signal (REQ-017), which is a later feature.

@@ -1,0 +1,19 @@
+# Project metadata and tool configuration for the ELENTA local chat service.
+# Dependencies are added only when a feature needs them (see docs/architecture-decisions.md).
+
+[project]
+name = "elenta-ai"
+version = "0.1.0"
+description = "Local, containerised chat service that answers from a live document corpus."
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Lets tests import the app package from the repo root without installing it.
+pythonpath = ["."]

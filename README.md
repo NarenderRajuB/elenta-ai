@@ -12,13 +12,14 @@ A small, local, containerised chat service that answers questions from a live do
 | [docs/overview.md](docs/overview.md) | Purpose, supported use, scope, known limits |
 | [docs/architecture.md](docs/architecture.md) | Components, boundaries, storage, model connection, system diagram |
 | [docs/request-flow.md](docs/request-flow.md) | Corpus refresh and chat flow with diagrams; following one request |
+| [docs/setup.md](docs/setup.md) | From a fresh machine to the first streamed answer, step by step |
 | [docs/spec.md](docs/spec.md) | Structured summary of the brief, interpretations, open questions |
 | [docs/requirements.md](docs/requirements.md) | Requirements register (REQ-001 … REQ-141), each traced to a brief section (`§` = section of the brief) |
 | [docs/acceptance-criteria.md](docs/acceptance-criteria.md) | Live review scenarios and per-requirement acceptance criteria |
 | [docs/architecture-decisions.md](docs/architecture-decisions.md) | Decision log (ADRs) |
 | [docs/troubleshooting-log.md](docs/troubleshooting-log.md) | Issues and dead ends, in the order they occurred |
 
-The rest of the guide (setup, configuration, operations, security, failure handling) is being added under `docs/`; see [docs/README.md](docs/README.md) for its current state.
+The rest of the guide (configuration, operations, security, failure handling) is being added under `docs/`; see [docs/README.md](docs/README.md) for its current state.
 
 ## Current architecture decisions
 
@@ -39,7 +40,9 @@ The rest of the guide (setup, configuration, operations, security, failure handl
 | Observability | OpenTelemetry trace per request (trace id = request id) → local Jaeger; JSON logs with the request id | ADR-008 |
 | Prompt and output safety | Fixed system instructions; evidence in delimited, neutralised blocks; leak and reasoning filter on output; no execution of document text | ADR-006 |
 
-## Prerequisites (so far)
+## Prerequisites
+
+Step-by-step setup, including other platforms: [docs/setup.md](docs/setup.md).
 
 - [uv](https://docs.astral.sh/uv/) 0.11+ (it provides Python 3.12 from `.python-version`)
 - Ollama running on the host with `gemma3:1b` pulled (`ollama pull gemma3:1b`), context pinned to 4096 tokens (see [Ollama setup](#ollama-setup)). Needed to see `/readyz` report *ready*. The automated tests do **not** need it.
@@ -162,9 +165,9 @@ docker compose down
 - If `.env` is missing or incomplete, the container exits with code **2** and lists the missing variables (`docker compose logs app`).
 - The container health status reflects **liveness** only. Check `/readyz` for model availability.
 
-Docker / Compose prerequisites will be listed when the container feature lands.
+Full setup steps: [docs/setup.md](docs/setup.md).
 
-## Running the service locally (no Docker yet)
+## Running the service locally (without Docker)
 
 ```bash
 uv sync

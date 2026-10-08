@@ -316,3 +316,35 @@ class TestSelectionSettings:
     def test_edge_minimums_accepted(self):
         s = load_settings({**VALID, "CHUNK_MAX_CHARS": "1", "CONTEXT_TOKEN_BUDGET": "1", "SELECTION_MIN_SCORE": "0"})
         assert (s.chunk_max_chars, s.context_token_budget, s.selection_min_score) == (1, 1, 0.0)
+
+
+# ---------------------------------------------------------------------------
+# Context accounting (LLM_CONTEXT_TOKENS, LLM_MAX_TOKENS): REQ-055, REQ-071, REQ-016
+# ---------------------------------------------------------------------------
+
+class TestContextSettings:
+    def test_positive_defaults_match_ollama_pin(self):
+        s = load_settings(VALID)
+        assert (s.llm_context_tokens, s.llm_max_tokens) == (4096, 512)
+
+    def test_positive_overrides(self):
+        s = load_settings({**VALID, "LLM_CONTEXT_TOKENS": "8192", "LLM_MAX_TOKENS": "1024"})
+        assert (s.llm_context_tokens, s.llm_max_tokens) == (8192, 1024)
+
+    @pytest.mark.parametrize("name", ["LLM_CONTEXT_TOKENS", "LLM_MAX_TOKENS"])
+    @pytest.mark.parametrize("value", ["0", "-1", "abc", "4096.5"])
+    def test_negative_invalid_numbers(self, name, value):
+        with pytest.raises(ConfigError, match=f"{name} must be a whole number of at least 1"):
+            load_settings({**VALID, name: value})
+
+    def test_negative_answer_allowance_not_below_context(self):
+        with pytest.raises(ConfigError, match="LLM_MAX_TOKENS must be smaller than LLM_CONTEXT_TOKENS"):
+            load_settings({**VALID, "LLM_CONTEXT_TOKENS": "1000", "LLM_MAX_TOKENS": "1000"})
+
+    def test_negative_evidence_budget_not_below_context(self):
+        with pytest.raises(ConfigError, match="CONTEXT_TOKEN_BUDGET must be smaller than LLM_CONTEXT_TOKENS"):
+            load_settings({**VALID, "LLM_CONTEXT_TOKENS": "1500"})
+
+    def test_edge_just_below_context_accepted(self):
+        s = load_settings({**VALID, "LLM_CONTEXT_TOKENS": "1501", "LLM_MAX_TOKENS": "1500"})
+        assert (s.llm_context_tokens, s.llm_max_tokens) == (1501, 1500)

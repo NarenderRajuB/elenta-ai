@@ -70,6 +70,17 @@ def test_negative_corpus_dir_that_is_a_file_aborts(tmp_path):
     assert code == 2 and "CORPUS_DIR" in stderr
 
 
+def test_negative_budget_that_cannot_fit_context_aborts(tmp_path):
+    # Each value is individually valid, but instructions + 3000 evidence + 100 question
+    # cannot fit in 4096 - 1000: startup must refuse rather than overflow per request.
+    code, stderr = _exit_of({
+        "LLM_URL": "http://127.0.0.1:1/v1", "LLM_MODEL": "m", "CORPUS_DIR": str(tmp_path),
+        "CONTEXT_TOKEN_BUDGET": "3000", "LLM_MAX_TOKENS": "1000",
+    })
+    assert code == 2
+    assert "Context budget does not fit" in stderr and "Traceback" not in stderr
+
+
 def test_edge_secret_in_bad_url_not_printed():
     code, stderr = _exit_of({"LLM_URL": "ftp://user:s3cret@host", "LLM_MODEL": "m"})
     assert code == 2 and "s3cret" not in stderr

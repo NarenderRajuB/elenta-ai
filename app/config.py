@@ -39,6 +39,11 @@ DEFAULT_CONTEXT_TOKEN_BUDGET = 1500
 # BM25 score a chunk must exceed to count as evidence. 0 means "shares at least one
 # meaningful word with the question"; raise it to demand stronger matches.
 DEFAULT_SELECTION_MIN_SCORE = 0.0
+# Model context window (must match the server: Ollama is pinned to 4096, TS-005) and the
+# answer allowance sent as max_tokens. The prompt may use context minus answer allowance;
+# anything larger is rejected rather than silently truncated by the server (REQ-055).
+DEFAULT_LLM_CONTEXT_TOKENS = 4096
+DEFAULT_LLM_MAX_TOKENS = 512
 
 
 class ConfigError(Exception):
@@ -71,6 +76,9 @@ class Settings:
     chunk_max_chars: int = DEFAULT_CHUNK_MAX_CHARS
     context_token_budget: int = DEFAULT_CONTEXT_TOKEN_BUDGET
     selection_min_score: float = DEFAULT_SELECTION_MIN_SCORE
+    # Context accounting (REQ-055, REQ-071).
+    llm_context_tokens: int = DEFAULT_LLM_CONTEXT_TOKENS
+    llm_max_tokens: int = DEFAULT_LLM_MAX_TOKENS
 
 
 def _require(environ: Mapping[str, str], name: str, problems: list[str]) -> str:
@@ -215,6 +223,16 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
         else DEFAULT_SELECTION_MIN_SCORE
     )
 
+    llm_context_tokens = optional_int("LLM_CONTEXT_TOKENS", DEFAULT_LLM_CONTEXT_TOKENS)
+    llm_max_tokens = optional_int("LLM_MAX_TOKENS", DEFAULT_LLM_MAX_TOKENS)
+    # Cross-field rule checked here because both values are plain numbers. Whether the
+    # fixed prompt text also fits is checked at startup (app/__main__.py), because that
+    # depends on the prompt module, not on configuration alone.
+    if llm_max_tokens >= llm_context_tokens:
+        problems.append("LLM_MAX_TOKENS must be smaller than LLM_CONTEXT_TOKENS")
+    if context_token_budget >= llm_context_tokens:
+        problems.append("CONTEXT_TOKEN_BUDGET must be smaller than LLM_CONTEXT_TOKENS")
+
     if problems:
         raise ConfigError(problems)
     return Settings(
@@ -230,6 +248,8 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
         chunk_max_chars=chunk_max_chars,
         context_token_budget=context_token_budget,
         selection_min_score=min_score,
+        llm_context_tokens=llm_context_tokens,
+        llm_max_tokens=llm_max_tokens,
     )
 
 

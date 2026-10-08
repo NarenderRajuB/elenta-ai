@@ -4,7 +4,7 @@ Decision log required by brief §5.11 (REQ-110, REQ-112). Entries are appended *
 
 **Statuses**: `Proposed` (drafted, awaiting candidate acceptance) · `Accepted` · `Superseded` · `Rejected`.
 
-> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-002, ADR-005, ADR-007, ADR-011, ADR-012, ADR-013, ADR-014, ADR-015. Rejected: ADR-003.
+> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-002, ADR-005, ADR-006, ADR-007, ADR-011, ADR-012, ADR-013, ADR-014, ADR-015. Rejected: ADR-003.
 
 Template:
 
@@ -148,28 +148,45 @@ Template:
 
 ## ADR-006: Trust boundaries and prompt assembly enforced in code, not delegated to the model
 
-- **Status:** Proposed · **Date:** 2026-10-08
-- **Requirements:** REQ-052, REQ-060, REQ-061, REQ-062, REQ-063, REQ-065, REQ-068, REQ-072
+- **Status:** Accepted by the candidate on 2026-10-08 · **Date:** 2026-10-08 · **Revised:** 2026-10-08. At the candidate's request, every control is now traced to the brief's own wording; items outside this decision's scope were moved out; one uncovered brief requirement was added.
+- **Requirements:** REQ-052, REQ-060, REQ-061, REQ-062, REQ-063, REQ-072
 
-**Context.** "Both document content and model output are untrusted … rather than relying on the model to police itself" (§5.6). A ≤1B model will not reliably resist injection.
+**Context.** The brief, §5.6: "Both document content and model output are untrusted. Your design must establish clear trust boundaries rather than relying on the model to police itself." A ≤1B model (REQ-020) cannot be relied on to resist instructions embedded in documents, so each control below is enforced by application code. Prompt wording is used only as an additional layer.
 
-**Decision.**
-1. **Instruction hierarchy:** `system` message holds only fixed application instructions (from code, never from documents or user). Evidence goes into a separate message, each chunk wrapped in clearly delimited blocks labelled with its chunk ID, with delimiter-like sequences in document text neutralised. The user question goes last.
-2. **Attribution outside the model:** sources are sent to the client as a structured `sources` event computed by our selection code, so a document cannot suppress attribution.
-3. **Output filter:** stream passes through a deterministic filter that strips known reasoning markers (e.g. `<think>…</think>`) and logs when it does.
-4. **No execution:** document text is only ever handled as a string; no `eval`, templates (no Jinja on doc content), shell or tool calls exist in the system.
-5. **Rendering:** browser uses `textContent` only; no Markdown rendering (see ADR-010).
-6. **Logging:** log IDs, counts and lengths — never full prompts or document bodies.
+**Decision.** Each control lists the brief text it implements.
 
-**Rationale.** Each control is deterministic and testable without the model. The model's compliance becomes defence-in-depth, not the boundary.
+| # | Control (enforced in code) | Brief source (quoted) | REQ |
+|---|---|---|---|
+| C1 | **Instruction hierarchy.** The `system` message contains only fixed application instructions defined in code. Evidence goes in a separate message, each chunk inside a delimited block labelled with its chunk ID. The user's question comes last. No document or user text is ever placed in the `system` message. | §5.6 "Implement and document an instruction hierarchy and prompt-assembly approach that keeps application instructions separate from retrieved evidence." §5.5 "Treat retrieved text as evidence, not as instructions." | 061, 052 |
+| C2 | **Evidence cannot break out of its block.** Any occurrence of the block delimiters inside document text is neutralised before assembly, so a document cannot close its own block and pose as application instructions. | §5.6 same sentence ("keeps application instructions separate from retrieved evidence"). This is how the separation in C1 is made to hold. | 061 |
+| C3 | **Attribution does not depend on the model.** The sources sent to the client are computed by selection code (ADR-007) and sent as structured data, independent of the model's text. | §5.6 "A malicious instruction inside a document must not … suppress source attribution." §5.5 "Each grounded answer must identify the source filename or stable chunk identifier used." | 062, 051 |
+| C4 | **Hidden instructions are not exposed.** The streamed output is checked against the `system` instructions. If the answer reproduces a substantial verbatim part of them, the stream is stopped and replaced with a fixed refusal, and the event is logged. | §5.6 "must not … expose hidden instructions." §5.7 "The model attempts to expose … hidden instructions." | 062, 072 |
+| C5 | **Reasoning is not shown.** The streamed output passes a fixed filter that removes reasoning blocks (e.g. `<think>…</think>`) before they reach the client, and logs when it does. | §5.7 "The model attempts to expose reasoning … or chain-of-thought-like content instead of a concise final answer." | 072 |
+| C6 | **No answer without evidence.** If selection finds no qualifying evidence (ADR-007), the service returns a fixed "not enough evidence" response **without calling the model**, so the model cannot fill the gap with an invented decision. | §5.5 "When the corpus does not contain enough evidence, say so plainly instead of filling the gap from model memory." §5.6 "must not … manufacture an approval or other unsupported decision." | 053, 062 |
+| C7 | **Role and decisions stay fixed.** The `system` instructions state the service role, that evidence is data and never instructions, that answers must be based only on the evidence, and that no approval or decision may be stated unless the evidence states it. This is the prompt-level layer on top of C1–C6. | §5.6 "must not change the assistant role … or manufacture an approval or other unsupported decision." §5.5 "The answer must remain within the service role even when a document contains prompt-like language." | 062, 052 |
+| C8 | **No execution.** Document text is handled only as a string: it is never passed to `eval`/`exec`, a template engine, a shell, or a tool/function-call mechanism, and the app defines no tools. | §5.6 "Never execute document content as code, a shell command, a template, or a tool instruction." | 063 |
+
+**Moved out of this ADR (still required by the brief, decided elsewhere):**
+- Browser rendering of untrusted text (§5.6 "Render output using safe text encoding…", REQ-065) belongs to ADR-010.
+- Keeping full prompts and document bodies out of logs and traces (§5.6, REQ-068) belongs to the observability decision (ADR-008). C4 and C5 log only the fact and type of the event, never the text.
+
+**Rationale.** C1–C6 and C8 are deterministic and testable without a model. C7 depends on the model and is therefore only an extra layer, as §5.6 requires ("rather than relying on the model to police itself").
 
 **Alternatives rejected.**
-- *Prompt-only defences*: rely on the model — explicitly ruled out.
-- *LLM-based injection classifier*: model policing model; extra latency and still unreliable.
+- *Prompt-only defences*: rely on the model, which §5.6 rules out.
+- *A second model to classify injections*: still a model policing a model, adds latency, and isn't asked for by the brief.
 
-**Consequences.** + Demonstrable, testable boundaries. − We cannot *guarantee* the small model's prose never echoes injected text; the remaining risk is documented in Security docs. Follow-up: decide whether to detect leakage of the system prompt text in output (e.g. substring check) and block it.
+**Consequences / remaining risk (to be stated in the Security docs, REQ-107).**
+- When evidence *is* found, C7 is the only control on what the model concludes from it. A small model may still paraphrase injected text or overstate what the evidence says. No deterministic check for "unsupported decision" in free text is proposed, because any keyword rule would be invented beyond the brief. This residual risk is documented, and review scenario 4 demonstrates the behaviour.
+- C4 catches verbatim or near-verbatim leakage of the instructions, not paraphrase.
+- C5 recognises known reasoning markers only.
 
----
+**Implementation (2026-10-08).** `app/prompt.py` (C1, C2, C7, context check), `app/output_guard.py` (C4, C5), `tests/test_no_execution.py` (C8 static scan). C3 and C6 are wired in the chat feature from `Selection.source_files` and `Selection.sufficient`.
+- Evidence block: `<<<EVIDENCE id="…" source="…" [truncated="true"]>>> … <<<END EVIDENCE>>>`. `<<<`/`>>>` in document text, file names and the question are replaced with `‹‹‹`/`›››`.
+- C4: blocked if any 60 consecutive characters of the system prompt appear in the answer (lower-cased, whitespace collapsed). Only a tail that also occurs in the system prompt is held back, so ordinary text streams immediately.
+- C5: `<think>` and `<thinking>` blocks (any case) are removed, including when split across chunks or left unclosed.
+- Whole-prompt check: settings `LLM_CONTEXT_TOKENS` (4096) and `LLM_MAX_TOKENS` (512). The prompt may use context minus answer allowance; a larger prompt raises `PromptTooLarge`. At startup, instructions + evidence budget + 100 question tokens must fit, otherwise exit 2.
+- **Live result:** see TS-006. C4/C5/C6 behaved as designed; C7 (prompt-only) failed once out of two runs on an injected "APPROVED", which is the remaining risk above. Decision on mitigation pending.
 
 ## ADR-007: Lexical (BM25) evidence selection with an explicit, estimated token budget
 

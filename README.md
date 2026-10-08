@@ -13,13 +13,14 @@ A small, local, containerised chat service that answers questions from a live do
 | [docs/architecture.md](docs/architecture.md) | Components, boundaries, storage, model connection, system diagram |
 | [docs/request-flow.md](docs/request-flow.md) | Corpus refresh and chat flow with diagrams; following one request |
 | [docs/setup.md](docs/setup.md) | From a fresh machine to the first streamed answer, step by step |
+| [docs/configuration.md](docs/configuration.md) | Every environment variable: default, accepted values, effect; combined rules |
 | [docs/spec.md](docs/spec.md) | Structured summary of the brief, interpretations, open questions |
 | [docs/requirements.md](docs/requirements.md) | Requirements register (REQ-001 … REQ-141), each traced to a brief section (`§` = section of the brief) |
 | [docs/acceptance-criteria.md](docs/acceptance-criteria.md) | Live review scenarios and per-requirement acceptance criteria |
 | [docs/architecture-decisions.md](docs/architecture-decisions.md) | Decision log (ADRs) |
 | [docs/troubleshooting-log.md](docs/troubleshooting-log.md) | Issues and dead ends, in the order they occurred |
 
-The rest of the guide (configuration, operations, security, failure handling) is being added under `docs/`; see [docs/README.md](docs/README.md) for its current state.
+The rest of the guide (operations, security, failure handling) is being added under `docs/`; see [docs/README.md](docs/README.md) for its current state.
 
 ## Current architecture decisions
 
@@ -245,33 +246,9 @@ scripts/verify.sh --offline     # skip checks that need internet (pip-audit, Tri
 
 ## Configuration
 
-All configuration is via environment variables (REQ-013). [`.env.example`](.env.example) is the reference; copy it to `.env` and adjust. `.env` is git-ignored.
+All configuration is via environment variables (REQ-013). [`.env.example`](.env.example) is the reference: copy it to `.env` and adjust (`.env` is git-ignored). Only `LLM_URL` and `LLM_MODEL` are required; blank optional values use their defaults. If anything is missing or invalid, the app lists every problem in one error and exits with code 2, never repeating a URL value.
 
-| Variable | Required | Example | Effect |
-|---|---|---|---|
-| `LLM_URL` | Yes | `http://host.docker.internal:11434/v1` | Base URL of any OpenAI-compatible endpoint. The client appends `/chat/completions`. Must be `http`/`https` with a host, a valid port if given, and no query string or fragment. Trailing `/` is removed. |
-| `LLM_MODEL` | Yes | `gemma3:1b` | Model identifier, passed to the endpoint unchanged. `/readyz` checks it is listed by the endpoint. |
-| `APP_HOST` | No (default `127.0.0.1`) | `127.0.0.1` | Interface the server binds to. Loopback keeps a local run off the network; a container must use `0.0.0.0`. |
-| `APP_PORT` | No (default `8000`) | `8000` | Server port, whole number 1–65535. |
-| `LLM_HEALTH_TIMEOUT_SECONDS` | No (default `3`) | `3` | Max wait for the `/readyz` model probe; positive, finite seconds. |
-| `CORPUS_DIR` | No (default `/data`) | `/data` | Corpus root; nothing outside it is read. A relative path is made absolute. Must exist at startup (exit 2 otherwise). Fixed to `/data` in Compose. |
-| `CORPUS_MAX_FILE_BYTES` | No (default `52428800` = 50 MB) | `52428800` | Larger files are skipped (`too_large`). Whole number ≥ 1. |
-| `CORPUS_MAX_FILES` | No (default `500`) | `500` | Supported files beyond this (in sorted path order) are skipped (`file_limit_exceeded`). Whole number ≥ 1. |
-| `CORPUS_SETTLE_SECONDS` | No (default `0.5`) | `0.5` | A file modified more recently is treated as still being written and picked up later. `0` disables. |
-| `CHUNK_MAX_CHARS` | No (default `800`) | `800` | Target maximum characters per evidence chunk (~200 estimated tokens). Whole number ≥ 1. |
-| `CONTEXT_TOKEN_BUDGET` | No (default `1500`) | `1500` | Maximum **estimated** tokens of evidence per question. Must stay well below the model's context (4096). Whole number ≥ 1. |
-| `LLM_CONTEXT_TOKENS` | No (default `4096`) | `4096` | Model context window; must match the server (Ollama pinned to 4096). |
-| `LLM_MAX_TOKENS` | No (default `512`) | `512` | Answer allowance sent as `max_tokens`. Prompt may use `LLM_CONTEXT_TOKENS − LLM_MAX_TOKENS`; at startup, instructions + `CONTEXT_TOKEN_BUDGET` + 100 question tokens must fit, or the app exits with code 2. |
-| `LLM_TEMPERATURE` | No (default `0`) | `0` | Sampling temperature sent with each request, 0–2. `0` = as repeatable as the server allows (TS-006). |
-| `LLM_CONNECT_TIMEOUT_SECONDS` | No (default `5`) | `5` | Max time to connect to the model server. |
-| `LLM_READ_TIMEOUT_SECONDS` | No (default `60`) | `60` | Max wait for the next streamed piece, including the first (prompt processing on CPU). |
-| `LLM_REQUEST_TIMEOUT_SECONDS` | No (default `180`) | `180` | Hard cap on one model call (checked per piece). |
-| `OTLP_TRACES_URL` | No (default empty) | `http://jaeger:4318/v1/traces` | OTLP/HTTP endpoint of a **local** trace collector. Set by Compose. Empty: traces are created (ids still used) but not exported. |
-| `SELECTION_MIN_SCORE` | No (default `0`) | `0` | BM25 score a chunk must exceed to count as evidence. `0` = shares at least one meaningful word with the question. |
-
-A blank optional value means "use the default".
-
-If anything is missing or invalid, loading fails with **one** error that lists every problem. The error never repeats the URL value, because it may contain credentials.
+Every variable, its accepted values, the rules that combine them and the four that Compose fixes: [docs/configuration.md](docs/configuration.md).
 
 ## Live corpus
 

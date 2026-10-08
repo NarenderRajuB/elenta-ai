@@ -55,7 +55,7 @@ ps eww -o command= -p "$(pgrep -f 'ollama serve' | head -1)" | tr ' ' '\n' | gre
 cp .env.example .env
 ```
 
-The example values work as they are for this setup: `LLM_URL=http://host.docker.internal:11434/v1` (Ollama on the host, as seen from the container) and `LLM_MODEL=gemma3:1b`. Every other setting is optional; see the [README configuration table](../README.md#configuration). `.env` is git-ignored.
+The example values work as they are for this setup: `LLM_URL=http://host.docker.internal:11434/v1` (Ollama on the host, as seen from the container) and `LLM_MODEL=gemma3:1b`. Every other setting is optional; see [Configuration](configuration.md). `.env` is git-ignored.
 
 ## 5. Add documents
 

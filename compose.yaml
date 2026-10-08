@@ -20,10 +20,21 @@ services:
       APP_PORT: "8000"
       # Fixed: must match the volume target below.
       CORPUS_DIR: /data
-      # Optional limits; empty means the documented defaults (50 MB, 500 files, 0.5 s).
+      # Optional settings from .env. Every variable in .env.example is listed here except
+      # the four fixed in this file; a test enforces it, so a setting in .env can't be
+      # silently ignored. Empty means the documented default.
       CORPUS_MAX_FILE_BYTES: ${CORPUS_MAX_FILE_BYTES:-}
       CORPUS_MAX_FILES: ${CORPUS_MAX_FILES:-}
       CORPUS_SETTLE_SECONDS: ${CORPUS_SETTLE_SECONDS:-}
+      CHUNK_MAX_CHARS: ${CHUNK_MAX_CHARS:-}
+      CONTEXT_TOKEN_BUDGET: ${CONTEXT_TOKEN_BUDGET:-}
+      SELECTION_MIN_SCORE: ${SELECTION_MIN_SCORE:-}
+      LLM_CONTEXT_TOKENS: ${LLM_CONTEXT_TOKENS:-}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-}
+      LLM_CONNECT_TIMEOUT_SECONDS: ${LLM_CONNECT_TIMEOUT_SECONDS:-}
+      LLM_READ_TIMEOUT_SECONDS: ${LLM_READ_TIMEOUT_SECONDS:-}
+      LLM_REQUEST_TIMEOUT_SECONDS: ${LLM_REQUEST_TIMEOUT_SECONDS:-}
       # Traces go to the bundled local Jaeger over the Compose network (ADR-008, REQ-085).
       OTLP_TRACES_URL: http://jaeger:4318/v1/traces
     ports:

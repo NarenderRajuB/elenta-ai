@@ -1,4 +1,4 @@
-# Token estimation shared by selection (evidence budget) and, later, prompt assembly.
+# Token estimation shared by selection (evidence budget) and prompt assembly (context check).
 #
 # The app cannot use the model's real tokenizer without depending on a specific model
 # (ADR-007, REQ-022), so it estimates. Every count produced here is reported as

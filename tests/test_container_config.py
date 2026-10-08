@@ -1,7 +1,8 @@
 # Static checks of the container definition: compose.yaml, Dockerfile, .dockerignore.
 #
 # Covers REQ-011 (compose brings up the app), REQ-040/REQ-067 (read-only /data mount),
-# REQ-066 (non-root), REQ-012 (pinned, reproducible build) and ADR-012/ADR-015 choices.
+# REQ-066 (non-root), REQ-012 (pinned, reproducible build), REQ-013/REQ-014 (every
+# .env.example setting reaches the container) and ADR-012/ADR-015 choices.
 # Uses `docker compose config` so the file is checked exactly as Compose interprets it.
 # Fast (no build, no containers); skipped if the docker CLI is unavailable.
 
@@ -18,9 +19,10 @@ ROOT = Path(__file__).resolve().parent.parent
 pytestmark = pytest.mark.skipif(shutil.which("docker") is None, reason="docker CLI not installed")
 
 
-def _compose_config(**env_overrides: str) -> dict:
+def _compose_config(env_file: str | None = None, **env_overrides: str) -> dict:
+    # env_file replaces the project's .env (Compose reads it for ${...} substitution).
     result = subprocess.run(
-        ["docker", "compose", "config", "--format", "json"],
+        ["docker", "compose", *(["--env-file", env_file] if env_file else []), "config", "--format", "json"],
         cwd=ROOT,
         env={**os.environ, **env_overrides},
         capture_output=True,
@@ -122,6 +124,55 @@ def test_edge_host_gateway_alias_for_native_linux(app_service):
 
 def test_edge_tmpfs_is_the_only_writable_path(app_service):
     assert app_service["tmpfs"] == ["/tmp"]
+
+
+# --- Every .env.example setting reaches the container (REQ-013, REQ-014) -----------
+
+# Set in compose.yaml itself, not from .env: they must match the container's port,
+# mount and Compose network (see the comments there).
+FIXED_IN_COMPOSE = {
+    "APP_HOST": "0.0.0.0",
+    "APP_PORT": "8000",
+    "CORPUS_DIR": "/data",
+    "OTLP_TRACES_URL": "http://jaeger:4318/v1/traces",
+}
+
+
+def _env_example_names() -> list[str]:
+    lines = (ROOT / ".env.example").read_text(encoding="utf-8").splitlines()
+    return [line.split("=", 1)[0] for line in lines if line and not line.startswith("#") and "=" in line]
+
+
+def test_positive_every_env_example_setting_is_passed_from_env():
+    # A distinct value per variable proves each one is wired to its own name.
+    passed = [n for n in _env_example_names() if n not in FIXED_IN_COMPOSE]
+    environment = _compose_config(**{name: f"value-of-{name}" for name in passed})["environment"]
+    for name in passed:
+        assert environment.get(name) == f"value-of-{name}", f"{name} in .env would be ignored by Compose"
+
+
+def test_negative_fixed_settings_cannot_be_overridden_from_env():
+    overrides = dict.fromkeys(FIXED_IN_COMPOSE, "from-env")
+    environment = _compose_config(LLM_URL="http://h/v1", LLM_MODEL="m", **overrides)["environment"]
+    for name, value in FIXED_IN_COMPOSE.items():
+        assert environment[name] == value
+
+
+def test_negative_compose_passes_nothing_that_env_example_does_not_document(app_service):
+    assert set(app_service["environment"]) == set(_env_example_names())
+
+
+def test_edge_unset_optional_settings_render_empty_so_app_defaults_apply(tmp_path):
+    # Without a .env, optional settings must render as "" (the app treats blank as
+    # "use the default"), not be dropped or given a value Compose invented.
+    empty = tmp_path / "empty.env"
+    empty.write_text("", encoding="utf-8")
+    optional = [n for n in _env_example_names() if n not in FIXED_IN_COMPOSE and n not in ("LLM_URL", "LLM_MODEL")]
+    environment = _compose_config(
+        env_file=str(empty), LLM_URL="http://h/v1", LLM_MODEL="m", **dict.fromkeys(optional, "")
+    )["environment"]
+    for name in optional:
+        assert environment[name] == "", name
 
 
 # --- Trace viewer (ADR-008, REQ-085, REQ-012) ----------------------------------------

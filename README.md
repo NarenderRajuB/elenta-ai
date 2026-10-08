@@ -218,7 +218,7 @@ Run a single requirement's tests, for example:
 uv run pytest -v tests/test_config.py::TestReq016FailFast
 ```
 
-Current result: **540 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Test-only dev dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The other dev tools are listed below. The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
+Current result: **544 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Test-only dev dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The other dev tools are listed below. The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
 
 ## Code quality and security checks (REQ-120..123)
 
@@ -275,7 +275,7 @@ If anything is missing or invalid, loading fails with **one** error that lists e
 
 **Limits:** up to 50 MB per file and 500 files (both configurable). Anything over a limit is skipped and reported, never silently dropped.
 
-**How changes are picked up (ADR-005):** every chat request (the chat feature comes next) starts with a refresh. The refresh re-scans the directory, reuses files whose `(size, mtime, ctime, inode)` is unchanged, re-reads new or changed files, and drops anything no longer present. Each request sees exactly one complete snapshot.
+**How changes are picked up (ADR-005):** every chat request starts with a refresh. The refresh re-scans the directory, reuses files whose `(size, mtime, ctime, inode)` is unchanged, re-reads new or changed files, and drops anything no longer present. Each request sees exactly one complete snapshot.
 
 **When a change is ready to serve:** on the first request that starts after the file has been unmodified for `CORPUS_SETTLE_SECONDS` (0.5 s by default) and is then read without changing. Until then the file is **not served at all**, not even its previous version.
 
@@ -449,6 +449,7 @@ Code: `Dockerfile`, `compose.yaml`, `.dockerignore` · Tests: `tests/test_contai
 | ✅ | Host Ollama with the model available | `/readyz` 200 from inside the container (skipped if Ollama is absent) | 011 |
 | ✅ | Image built from `uv.lock` | `uv sync --frozen --no-dev` | 012 |
 | ✅ | Hardening | `read_only`, `cap_drop: [ALL]`, `no-new-privileges` | 066 |
+| ✅ | Each `.env.example` setting given a distinct value | Every one reaches the container under its own name (TS-011) | 013, 014 |
 | ❌ | Config missing (`LLM_URL=`, `LLM_MODEL=`) | Container exits 2, both named, no traceback | 016 |
 | ❌ | Write to `/data` or `/app` | `Read-only file system` | 067 |
 | ❌ | Model endpoint unreachable (dead port) | `/readyz` 503 `unreachable` | 017 |
@@ -456,7 +457,10 @@ Code: `Dockerfile`, `compose.yaml`, `.dockerignore` · Tests: `tests/test_contai
 | ❌ | Healthcheck uses `/readyz` | Test fails: must be liveness only (ADR-015) | 017 |
 | ❌ | `.env`, `data/`, `.git/` or `tests/` in build context | Test fails: listed in `.dockerignore` | 068 |
 | ❌ | Unpinned base image | Test fails: must be `@sha256:` digest | 012 |
+| ❌ | `APP_HOST`, `APP_PORT`, `CORPUS_DIR`, `OTLP_TRACES_URL` set in `.env` | Ignored: fixed in `compose.yaml` to match the port, mount and network | 013 |
+| ❌ | Compose passes a variable `.env.example` doesn't document | Test fails: the two lists must match | 014 |
 | ⚠️ | Compose rendered with empty `LLM_URL`/`LLM_MODEL` | Still valid; the app reports the problem | 016 |
+| ⚠️ | No `.env` at all | Optional settings render empty, so the app's documented defaults apply | 013 |
 | ⚠️ | `/tmp` | Writable (tmpfs), the only writable path | 066 |
 | ⚠️ | Linux capabilities | `CapEff` all zeros | 066 |
 | ⚠️ | `pytest` / `httpx2` in image | Absent | 012 |

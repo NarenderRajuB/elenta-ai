@@ -289,3 +289,22 @@ Exposure was limited (local development viewer; UI on `127.0.0.1` only; OTLP por
 4. Verified live: `docker compose up`, `/readyz` ready, one question gave a trace with all 5 spans in Jaeger 2.22.0. No configuration change was needed.
 
 **Remaining limitation.** Pinned images age: new findings appear as vulnerability data updates. Re-running `scripts/verify.sh` shows them; the pin then needs a deliberate update like this one.
+
+---
+
+## TS-011: Ten `.env` settings silently ignored under Docker Compose
+
+- **Date:** 2026-10-09
+- **Phase:** Writing the architecture guide (REQ-102), found while reading `compose.yaml`
+- **Related:** REQ-013, REQ-014, REQ-016, ADR-011
+
+**Symptom.** Setting `CONTEXT_TOKEN_BUDGET` (or nine other documented variables) in `.env` had no effect when running with Compose. The app started normally and used the default, with nothing in the logs.
+
+**Diagnosis.** Compose reads `.env` only to substitute `${...}` in `compose.yaml`; a variable reaches the container only if the `environment:` block lists it. That block was written when the container feature landed and was not extended when later features added settings: `CHUNK_MAX_CHARS`, `CONTEXT_TOKEN_BUDGET`, `SELECTION_MIN_SCORE`, `LLM_CONTEXT_TOKENS`, `LLM_MAX_TOKENS`, `LLM_TEMPERATURE` and the three `LLM_*_TIMEOUT_SECONDS` were missing. The existing test kept `.env.example` in step with the app's settings, but nothing checked `compose.yaml` against either. Running locally with `uv run python -m app` was not affected.
+
+**Resolution.**
+1. Added the ten variables to `compose.yaml` as `${NAME:-}` (empty means the app's default).
+2. New tests in `tests/test_container_config.py` give every `.env.example` variable a distinct value and check it reaches the container; check that the four variables fixed in `compose.yaml` (`APP_HOST`, `APP_PORT`, `CORPUS_DIR`, `OTLP_TRACES_URL`) can't be overridden; check that Compose passes nothing `.env.example` doesn't document; and check that without a `.env` the optional values are empty. Three of them failed against the old `compose.yaml`.
+3. Verified live: `CONTEXT_TOKEN_BUDGET=1234 LLM_TEMPERATURE=0.2 docker compose up` gave those values inside the container, and the app started.
+
+**Impact.** The development `.env` set none of the affected variables, so earlier live checks and the injection evaluation ran with the intended defaults.

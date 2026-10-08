@@ -1,0 +1,29 @@
+/*
+  Styles for the minimal browser UI (ADR-010). Served as a file so the
+  Content-Security-Policy can forbid inline styles.
+*/
+:root { --fg: #1d2330; --muted: #5b6475; --line: #d9dde5; --accent: #2457c5; --err: #b42318; --bg: #f7f8fa; }
+* { box-sizing: border-box; }
+body { margin: 0; font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--fg); background: var(--bg); }
+main { max-width: 780px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 1.5rem; margin: 0 0 4px; }
+h2 { font-size: 1rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 28px 0 8px; }
+.hint, .meta { color: var(--muted); font-size: .875rem; margin: 4px 0; }
+label { display: block; font-weight: 600; margin: 16px 0 6px; }
+textarea { width: 100%; padding: 10px 12px; font: inherit; border: 1px solid var(--line); border-radius: 8px; background: #fff; resize: vertical; }
+textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.actions { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+button { font: inherit; padding: 8px 18px; border-radius: 8px; border: 1px solid var(--accent); cursor: pointer; }
+#send { background: var(--accent); color: #fff; }
+#stop { background: #fff; color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; }
+#status { color: var(--muted); font-size: .875rem; }
+/* pre-wrap keeps the model's line breaks without rendering any markup. */
+.answer { white-space: pre-wrap; overflow-wrap: anywhere; min-height: 3em; padding: 14px 16px; background: #fff; border: 1px solid var(--line); border-radius: 8px; }
+.answer.refused { border-color: var(--err); }
+.error { color: var(--err); font-weight: 600; }
+.sources, .skipped { list-style: none; padding: 0; margin: 0; }
+.sources li { padding: 8px 12px; background: #fff; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 6px; }
+.sources .file { font-weight: 600; }
+.sources .detail { display: block; color: var(--muted); font-size: .8rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.skipped li { color: var(--err); font-size: .85rem; }

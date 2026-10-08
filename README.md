@@ -30,6 +30,8 @@ The full operator guide (architecture, setup, configuration, operations, securit
 | Container | Pinned slim base, non-root UID 10001, read-only root FS and `/data`, no capabilities, loopback-only port | ADR-012 |
 | Live corpus | Re-scan `/data` at the start of each request; reuse unchanged files; one immutable snapshot per refresh | ADR-005 |
 | Evidence selection | 800-char chunks, BM25 keyword ranking, 1500-token evidence budget, tokens estimated as chars/4 | ADR-007 |
+| Chat transport | `POST /chat` streams Server-Sent Events; one terminal `done` or `error` event | ADR-004 |
+| Browser UI | Static HTML/JS/CSS, text-only rendering, strict CSP; no Streamlit (ADR-017) | ADR-010 |
 | Prompt and output safety | Fixed system instructions; evidence in delimited, neutralised blocks; leak and reasoning filter on output; no execution of document text | ADR-006 |
 
 ## Prerequisites (so far)
@@ -40,6 +42,45 @@ The full operator guide (architecture, setup, configuration, operations, securit
 - Docker Desktop (tested: 4.94, Compose v5.5.1) for the containerised run.
 
 Internet is needed once, for `uv sync`, `ollama pull` and the first `docker compose build`, which pulls the pinned `python:3.12-slim` base. After that everything runs offline.
+
+## Asking a question
+
+**Browser:** open http://127.0.0.1:8000/ (same address for the Docker and the local run). Type a question, press **Ask**: the answer streams in, followed by its sources, the evidence budget, any skipped files and the request id. **Stop** cancels the answer and the model call.
+
+**Command line** (`-N` shows events as they arrive):
+
+```bash
+curl -N -X POST http://127.0.0.1:8000/chat -H 'Content-Type: application/json' \
+     -d '{"question":"How many days of annual leave do employees get?"}'
+```
+
+### Streaming protocol (`POST /chat`, Server-Sent Events)
+
+Request: `{"question": "<1-8000 characters>"}`. Invalid requests are rejected **before** streaming with plain JSON: `422` (missing, empty, not a string, too long) or `400` (blank).
+
+Each event is one frame: `event: <name>`, one `data:` line of JSON, a blank line.
+
+| Event | When | Data |
+|---|---|---|
+| `meta` | first | `request_id` |
+| `sources` | after evidence selection | `chunks` (id, source, score, estimated_tokens, truncated), `files`, `budget_tokens`, `used_tokens`, `dropped_chunks`, `truncated`, `insufficient_reason`, `skipped_files` (unusable files with reason), `corpus_version`, `documents`, `token_count_method` |
+| `token` | repeatedly | `text`: the next piece of the answer |
+| `refusal` | output guard stopped an instruction leak | `text`: replaces everything shown so far |
+| `done` | success (terminal) | `request_id`, `finish_reason`, `model_called`, `tokens` {prompt, completion, source: `reported` or `estimated (chars/4)`}, `timings_ms` per stage |
+| `error` | failure (terminal) | `request_id`, `code`, `message`, `partial` (true if answer text was already sent) |
+
+Exactly one terminal event (`done` or `error`) ends every stream.
+
+| `error.code` | Meaning |
+|---|---|
+| `model_unavailable` | Model server not reachable |
+| `model_timeout` | No data for `LLM_READ_TIMEOUT_SECONDS`, or the whole call exceeded `LLM_REQUEST_TIMEOUT_SECONDS` |
+| `model_http_error` | Model server answered with an error status |
+| `model_stream_failed` | Stream broke off or was malformed (usually `partial: true`) |
+| `question_too_long` | Prompt wouldn't fit the context window |
+| `internal_error` | Unexpected bug; logged with the request id |
+
+If the client disconnects, the server stops the model call (no work continues in the background).
 
 ## Ollama setup
 
@@ -137,7 +178,7 @@ Run a single requirement's tests, for example:
 uv run pytest -v tests/test_config.py::TestReq016FailFast
 ```
 
-Current result: **381 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Dev-only dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
+Current result: **490 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Dev-only dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
 
 ## Configuration
 
@@ -159,6 +200,9 @@ All configuration is via environment variables (REQ-013). [`.env.example`](.env.
 | `LLM_CONTEXT_TOKENS` | No (default `4096`) | `4096` | Model context window; must match the server (Ollama pinned to 4096). |
 | `LLM_MAX_TOKENS` | No (default `512`) | `512` | Answer allowance sent as `max_tokens`. Prompt may use `LLM_CONTEXT_TOKENS − LLM_MAX_TOKENS`; at startup, instructions + `CONTEXT_TOKEN_BUDGET` + 100 question tokens must fit, or the app exits with code 2. |
 | `LLM_TEMPERATURE` | No (default `0`) | `0` | Sampling temperature sent with each request, 0–2. `0` = as repeatable as the server allows (TS-006). |
+| `LLM_CONNECT_TIMEOUT_SECONDS` | No (default `5`) | `5` | Max time to connect to the model server. |
+| `LLM_READ_TIMEOUT_SECONDS` | No (default `60`) | `60` | Max wait for the next streamed piece, including the first (prompt processing on CPU). |
+| `LLM_REQUEST_TIMEOUT_SECONDS` | No (default `180`) | `180` | Hard cap on one model call (checked per piece). |
 | `SELECTION_MIN_SCORE` | No (default `0`) | `0` | BM25 score a chunk must exceed to count as evidence. `0` = shares at least one meaningful word with the question. |
 
 A blank optional value means "use the default".
@@ -625,6 +669,95 @@ Tests: `tests/test_prompt.py::TestPromptBudget`, `::TestGuardStreaming`, `tests/
 | ⚠️ | Ordinary text | Held back by at most a few characters |
 | ⚠️ | Instructions overhead | ~252 tokens (< 400) |
 
+### REQ-030 / REQ-032 / REQ-051: Chat endpoint, framing, sources
+Code: `app/chat.py`, `app/sse.py`, `app/main.py` · Tests: `tests/test_chat.py::TestGroundedAnswer`, `::TestValidation`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | Grounded question | `meta`, `sources`, `token`…, `done`; answer text correct |
+| ✅ | Model never mentions sources | `sources.files == ["leave.md"]` anyway (from selection) |
+| ✅ | Request id | Same 32-hex id on every event |
+| ✅ | Endpoint reports usage | `tokens.source = "reported"` |
+| ✅ | Request sent to the model | `system`/`user`/`user`; configured model, temperature, max_tokens |
+| ❌ | Missing / empty / non-string / >8000 chars | 422 before streaming; model not called |
+| ❌ | Blank question | 400; model not called |
+| ❌ | Question too long for the context | `error` `question_too_long`; model not called |
+| ⚠️ | No usage from endpoint | `tokens.source = "estimated (chars/4)"` |
+| ⚠️ | Answer contains `\n\nevent: done\ndata: {...}` | Stays inside one `token`; exactly one real `done` |
+| ⚠️ | Answer contains `<script>` / `onerror=` | Delivered as JSON text (UI renders as text) |
+| ⚠️ | Question with surrounding spaces | Trimmed |
+| ⚠️ | **Live (gemma3:1b, Docker):** "How many days of annual leave?" | "25 days" in 3 tokens; reported 296 prompt tokens vs 302 estimated |
+
+### REQ-031: Genuine progressive streaming
+Tests: `tests/test_streaming_e2e.py` (real sockets, fake model emitting a token every 0.15 s)
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | 12-token answer | ≥ 5 separate `token` events; first and last more than 0.9 s apart (not one flush) |
+
+### REQ-033: Disconnect and interrupted streams don't run on
+Tests: `tests/test_streaming_e2e.py`, `tests/test_chat.py`, `tests/test_inference.py`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ❌ | Client disconnects after the first token (real sockets) | Fake model's stream cancelled before finishing |
+| ❌ | Pipeline generator closed after the first token | Upstream response closed |
+| ❌ | Consumer stops reading the inference stream | Upstream response closed |
+| ⚠️ | Stalled stream | `model_timeout` after the read timeout |
+| ⚠️ | Slow stream past the whole-request deadline | `model_timeout` |
+
+### REQ-076: Model unavailable, timeout, or failure mid-stream
+Tests: `tests/test_chat.py::TestModelFailures`, `tests/test_inference.py`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | Normal stream with `[DONE]` | Deltas, usage, finish in order |
+| ❌ | Connection refused | `error` `model_unavailable`, `partial: false` |
+| ❌ | Connect/read timeout | `error` `model_timeout` |
+| ❌ | HTTP 400/404/500/503 | `error` `model_http_error` |
+| ❌ | Stream drops after text was sent | `error` `model_stream_failed`, `partial: true`; partial text kept |
+| ❌ | Malformed JSON in stream | `model_stream_failed` |
+| ⚠️ | Upstream error body with secrets | Never shown to the user |
+| ⚠️ | No `[DONE]`; keep-alive comments; empty deltas; `length` finish | Handled |
+| ⚠️ | Request id on the error | Matches `meta` |
+
+### REQ-053 / REQ-056 / REQ-055 on the live path
+Tests: `tests/test_chat.py::TestNoEvidence`, `::TestVisibility`, `::TestGuardOnLivePath`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ❌ | Empty corpus / stop words only / unrelated question | Fixed reply per reason; **model not called**; `model_called: false` |
+| ✅ | Budget 400 over 20 matching docs | `used_tokens ≤ 400`, `dropped_chunks > 0` shown |
+| ❌ | Corrupt file next to a valid one | `skipped_files: [bad.txt not_utf8]`; valid file still used |
+| ⚠️ | `.gitkeep`, `.pdf` | Not listed to the user (policy skips) |
+| ❌ | Model leaks instructions | `refusal` event; `finish_reason: instruction_leak_blocked` |
+| ❌ | Model emits `<think>` | Removed; `reasoning_blocks_removed: 1` |
+
+### REQ-065 / REQ-005: Browser UI
+Code: `app/static/` · Tests: `tests/test_ui.py`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | `GET /`, `/static/app.js`, `/static/style.css` | Served |
+| ✅ | Security headers | CSP, `nosniff`, `no-referrer` on every response |
+| ✅ | Text rendering | `textContent` / `createTextNode` used |
+| ❌ | `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write`, `eval(`, `new Function`, `DOMParser` | None in the code |
+| ❌ | CSP | No `unsafe-inline` / `unsafe-eval`; `default-src 'none'` |
+| ❌ | Inline `<script>`, `<style>`, `style=`, `onclick` in the page | None |
+| ❌ | External URLs in HTML/JS/CSS | None (offline) |
+| ❌ | `/docs`, `/openapi.json` | 404 (would load CDN scripts) |
+| ⚠️ | `/static/../config.py`, `%2e%2e` | 404 |
+| ⚠️ | Stop button | Aborts the fetch |
+
+### Inference timeouts (REQ-013 / REQ-016)
+Tests: `tests/test_config.py::TestInferenceTimeouts`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | Defaults; override | 5 / 60 / 180 s; applied |
+| ❌ | `0`, `-1`, `abc`, `nan`, `inf` | "must be a positive number of seconds" |
+| ⚠️ | `0.01`; blank | Accepted; default |
+
 ### REQ-091: Every source file opens with a header comment block
 Tests: `tests/test_file_headers.py`
 
@@ -643,15 +776,19 @@ app/
   __init__.py        package marker
   __main__.py        entry point: validate config, then serve (REQ-016)
   config.py          configuration boundary (REQ-013..016)
+  chat.py            per-request pipeline: refresh -> select -> prompt -> model -> guard -> events
   chunking.py        paragraph-aware chunks with stable IDs (ADR-007)
   corpus.py          corpus state: refresh, snapshot, change stats (ADR-005)
   index.py           BM25 index, rebuilt per corpus version (ADR-007)
+  inference.py       OpenAI-compatible streaming client, failure codes, timeouts (ADR-002)
   ingestion.py       safe file discovery and reading under the corpus root
   health.py          model endpoint readiness probe (REQ-017)
   main.py            FastAPI app factory, /healthz and /readyz (REQ-017)
   output_guard.py    streamed-output filter: reasoning removal, instruction-leak block (ADR-006)
   prompt.py          system instructions, evidence blocks, context check (ADR-006)
   selection.py       ranking + token budget -> evidence for one question
+  sse.py             Server-Sent Events framing (ADR-004)
+  static/            browser UI: index.html, app.js, style.css (ADR-010)
   tokens.py          token estimate (chars/4), labelled "estimated"
 data/                corpus, mounted read-only at /data (only .gitkeep so far)
 tests/
@@ -659,6 +796,10 @@ tests/
   test_corpus.py     ingestion and live-corpus tests by requirement
   test_selection.py  chunking, BM25, budget, insufficient-evidence tests
   test_prompt.py     prompt assembly and output guard by ADR-006 control
+  test_inference.py  model client: streaming, failures, timeouts
+  test_chat.py       /chat pipeline, framing, failures, validation, disconnect
+  test_streaming_e2e.py  real sockets: progressive streaming, disconnect cancels model
+  test_ui.py         browser UI safety: no HTML sinks, CSP, no external resources
   test_no_execution.py  static scan: no eval/exec/shell/templates in app/
   test_container_config.py   static checks of compose.yaml / Dockerfile
   test_container_runtime.py  real containers (-m container)

@@ -200,3 +200,22 @@ Other behaviour in the same runs was correct: no system-prompt leak (C4 not need
    - The model choice is recorded as ADR-016 (Proposed).
 3. **Document the remaining risk.** ADR-006 consequences, plus the Security docs when written (REQ-107).
 
+
+---
+
+## TS-007: httpx INFO logging printed the model endpoint URL
+
+- **Date:** 2026-10-08
+- **Phase:** Feature 7 (chat endpoint and UI), first live end-to-end run
+- **Related:** REQ-068, REQ-012
+
+**Symptom.** The app log contained a line from the `httpx` library for every model call:
+```
+INFO httpx HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+```
+
+**Diagnosis.** `logging.basicConfig(level=INFO)` in the entry point also enables third-party INFO logs, and httpx logs each request's full URL at INFO. `LLM_URL` is configuration that may contain credentials (`http://user:pass@host`). Config errors and `/readyz` were already written never to repeat it, so this line went against that design (REQ-068).
+
+**Resolution.** In `app/__main__.py` the `httpx` logger is set to WARNING. Our own `chat start`/`chat end` lines already record each model call by request id and timing.
+
+**Also noticed (not a defect).** The test harness started the app with `&` and stopped it with `kill %1`, which does nothing in a non-interactive shell, so the server stayed up on port 8766 until `pkill -f "python -m app"`. Later live checks use the PID explicitly.

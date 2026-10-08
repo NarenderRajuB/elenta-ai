@@ -4,7 +4,7 @@ Decision log required by brief §5.11 (REQ-110, REQ-112). Entries are appended *
 
 **Statuses**: `Proposed` (drafted, awaiting candidate acceptance) · `Accepted` · `Superseded` · `Rejected`.
 
-> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-002, ADR-005, ADR-006, ADR-007, ADR-011, ADR-012, ADR-013 (model superseded), ADR-014, ADR-015, ADR-016. Rejected: ADR-003.
+> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-002, ADR-004, ADR-005, ADR-006, ADR-007, ADR-010, ADR-011, ADR-012, ADR-013 (model superseded), ADR-014, ADR-015, ADR-016. Rejected: ADR-003.
 
 Template:
 
@@ -86,7 +86,7 @@ Template:
 
 ## ADR-004: Server-Sent Events over `POST /chat` as the streaming transport
 
-- **Status:** Proposed · **Date:** 2026-10-08
+- **Status:** Accepted on 2026-10-08: the candidate instructed implementation of the UI, which uses this decision · **Date:** 2026-10-08
 - **Requirements:** REQ-031, REQ-032, REQ-033, REQ-076, REQ-082
 
 **Context.** Need explicit, documented framing including errors mid-stream (§5.3).
@@ -102,6 +102,14 @@ Template:
 
 **Consequences.** + Errors after stream start have a defined shape. − Proxies can buffer SSE; we set `Cache-Control: no-cache` and `X-Accel-Buffering: no` and avoid any compression middleware.
 
+
+**Implementation (2026-10-08).** `app/chat.py` (pipeline → events), `app/sse.py` (framing), `app/inference.py` (upstream stream), `app/main.py` (route).
+- Frame = `event: <name>` + one `data:` line of JSON + blank line. `json.dumps` never emits raw newlines, so answer text can't forge or split frames (tested).
+- Sequence: `meta` → `sources` → `token`* → [`refusal`] → `done`, or … → `error`. Exactly one terminal event.
+- Before the stream starts, invalid input gets plain JSON: 422 (missing, empty, wrong type, > 8000 chars) or 400 (blank).
+- Error codes: `model_unavailable`, `model_timeout`, `model_http_error`, `model_stream_failed`, `question_too_long`, `internal_error`. Each has a fixed message, the request id, and `partial` (whether answer text had already been sent).
+- Disconnect: Starlette cancels the response, the generator chain closes, and the upstream HTTP response is closed. Verified over real sockets: a fake model stream is cut off mid-answer (`tests/test_streaming_e2e.py`).
+- Timeouts: connect 5 s, read gap 60 s, whole request 180 s (configurable). The deadline is checked per piece, not with a cancel scope (a cancel scope can't stay open across `yield` in an async generator).
 ---
 
 ## ADR-005: Request-time corpus refresh using a stat fingerprint, with stable-read checks
@@ -267,7 +275,7 @@ Template:
 
 ## ADR-010: Minimal static browser UI with plain-text rendering only
 
-- **Status:** Proposed · **Date:** 2026-10-08
+- **Status:** Accepted on 2026-10-08: the candidate instructed implementation of the UI, which uses this decision · **Date:** 2026-10-08
 - **Requirements:** REQ-005, REQ-030, REQ-065
 
 **Context.** UI must be clean and usable, and must never place untrusted content into an executable HTML sink.
@@ -282,6 +290,8 @@ Template:
 
 **Consequences.** + Minimal attack surface. − Answers render as plain text (line breaks preserved via CSS `white-space: pre-wrap`).
 
+
+**Implementation (2026-10-08).** `app/static/index.html`, `app.js`, `style.css`, served at `/` and `/static/`. All untrusted text goes through `textContent` / `createTextNode`; no HTML sinks or code evaluation (enforced by `tests/test_ui.py`). CSP: `default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`, plus `nosniff` and `no-referrer`, on every response. FastAPI's `/docs` is disabled because it loads scripts from a CDN, which conflicts with offline operation and the CSP. A Stop button aborts the fetch, which cancels the model call.
 ---
 
 ## ADR-011: Configuration via a single env-var module with fail-fast validation
@@ -433,6 +443,19 @@ Template:
 **Recommendation.** `gemma3:1b`. The brief's failure modes include "confidently invent", and inventing content from nothing is the more frequent, visible risk in a review demo. The missing system role is a model-internal detail that our code-enforced controls don't depend on. Switching needs only `LLM_MODEL=gemma3:1b` (REQ-015); no code change.
 
 **Consequences if accepted.** Update `.env.example` and README; `/readyz` will then require `gemma3:1b` to be pulled; re-run `scripts/eval_injection.py` after any prompt change. If rejected, `qwen2.5:0.5b` stays and its invention risk is documented.
+
+---
+
+## ADR-017: No Streamlit UI (alternative considered and dropped)
+
+- **Status:** Rejected by the candidate on 2026-10-08 · **Date:** 2026-10-08
+- **Requirements:** REQ-030, REQ-005, REQ-012, REQ-065
+
+**Context.** The candidate first asked for a Streamlit interface as an alternative to the minimal browser UI (ADR-010), then withdrew the request before any Streamlit code was written.
+
+**Decision.** Build only the minimal static browser UI (ADR-010). The brief requires "an HTTP endpoint or a minimal browser interface" (§5.3); one UI meets it.
+
+**Points noted at the time, kept for the review.** Streamlit sends usage telemetry unless `browser.gatherUsageStats=false` is set, which conflicts with REQ-012 ("no … hosted telemetry"). It renders Markdown by default, which would need a deliberate sanitisation path (REQ-065). And it brings a large dependency tree that would have to be reviewed and scanned (REQ-122, REQ-130).
 
 ---
 

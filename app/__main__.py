@@ -56,6 +56,9 @@ def main() -> int:
     # Plain-text logs to stderr for now; structured JSON logging arrives with the
     # observability feature (REQ-082).
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    # httpx logs every request URL at INFO. LLM_URL could carry credentials, and our own
+    # logs already record each model call by request id, so only its warnings are kept.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
     uvicorn.run(create_app(settings), host=settings.app_host, port=settings.app_port)
     return 0

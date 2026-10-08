@@ -23,6 +23,17 @@ def test_positive_every_source_file_has_header(path):
     assert has_header_comment(path.read_text(encoding="utf-8")), f"{path.name} has no header comment block"
 
 
+# Front-end files use their own comment syntax; the rule (REQ-091) is the same.
+WEB_FILES = sorted((ROOT / "app" / "static").glob("*.*"))
+WEB_COMMENT_START = {".html": "<!--", ".js": "//", ".css": "/*"}
+
+
+@pytest.mark.parametrize("path", WEB_FILES, ids=lambda p: p.relative_to(ROOT).as_posix())
+def test_positive_every_web_file_has_header(path):
+    first = path.read_text(encoding="utf-8").lstrip("\ufeff").splitlines()[0]
+    assert first.startswith(WEB_COMMENT_START[path.suffix]), f"{path.name} has no header comment block"
+
+
 def test_negative_code_first_line_rejected():
     assert not has_header_comment("import os\n# comment later\n")
 

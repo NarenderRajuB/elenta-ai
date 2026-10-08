@@ -1,0 +1,52 @@
+<!--
+  Minimal browser UI for the ELENTA chat service (ADR-010, REQ-005, REQ-030).
+  Static markup only: no inline script or style, so the Content-Security-Policy can
+  forbid both. All untrusted text (answers, sources, errors) is inserted by app.js
+  with textContent, never as HTML (REQ-065).
+-->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ELENTA document chat</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Document chat</h1>
+      <p class="hint">Answers come only from the documents in the corpus, with their sources.</p>
+    </header>
+
+    <form id="ask">
+      <label for="question">Question</label>
+      <textarea id="question" name="question" rows="3" maxlength="8000" required
+                placeholder="e.g. How many days of annual leave do employees get?"></textarea>
+      <div class="actions">
+        <button type="submit" id="send">Ask</button>
+        <button type="button" id="stop" disabled>Stop</button>
+        <span id="status" role="status" aria-live="polite"></span>
+      </div>
+    </form>
+
+    <section aria-labelledby="answer-heading">
+      <h2 id="answer-heading">Answer</h2>
+      <div id="answer" class="answer" aria-live="polite"></div>
+      <p id="error" class="error" role="alert" hidden></p>
+    </section>
+
+    <section aria-labelledby="sources-heading">
+      <h2 id="sources-heading">Sources</h2>
+      <ul id="sources" class="sources"></ul>
+      <p id="budget" class="meta"></p>
+      <ul id="skipped" class="skipped"></ul>
+    </section>
+
+    <footer>
+      <p id="request" class="meta"></p>
+    </footer>
+  </main>
+</body>
+</html>

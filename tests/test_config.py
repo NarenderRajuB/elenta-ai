@@ -374,3 +374,31 @@ class TestTemperatureSetting:
     @pytest.mark.parametrize("value, expected", [("2", 2.0), ("0", 0.0), ("  ", 0.0)])
     def test_edge_bounds_and_blank(self, value, expected):
         assert load_settings({**VALID, "LLM_TEMPERATURE": value}).llm_temperature == expected
+
+
+# ---------------------------------------------------------------------------
+# Inference timeouts: REQ-033 / REQ-076 (no call runs indefinitely), REQ-016
+# ---------------------------------------------------------------------------
+
+class TestInferenceTimeouts:
+    NAMES = ["LLM_CONNECT_TIMEOUT_SECONDS", "LLM_READ_TIMEOUT_SECONDS", "LLM_REQUEST_TIMEOUT_SECONDS"]
+
+    def test_positive_defaults(self):
+        s = load_settings(VALID)
+        assert (s.llm_connect_timeout_seconds, s.llm_read_timeout_seconds, s.llm_request_timeout_seconds) == (5.0, 60.0, 180.0)
+
+    @pytest.mark.parametrize("name", NAMES)
+    def test_positive_override(self, name):
+        s = load_settings({**VALID, name: "12.5"})
+        assert getattr(s, name.lower()) == 12.5
+
+    @pytest.mark.parametrize("name", NAMES)
+    @pytest.mark.parametrize("value", ["0", "-1", "abc", "nan", "inf"])
+    def test_negative_invalid(self, name, value):
+        with pytest.raises(ConfigError, match=f"{name} must be a positive number of seconds"):
+            load_settings({**VALID, name: value})
+
+    @pytest.mark.parametrize("name", NAMES)
+    def test_edge_tiny_value_and_blank(self, name):
+        assert getattr(load_settings({**VALID, name: "0.01"}), name.lower()) == 0.01
+        assert load_settings({**VALID, name: " "}) == load_settings(VALID)

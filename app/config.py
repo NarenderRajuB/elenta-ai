@@ -49,6 +49,12 @@ DEFAULT_LLM_MAX_TOKENS = 512
 # bound 2 is the range defined by the OpenAI-compatible API.
 DEFAULT_LLM_TEMPERATURE = 0.0
 MAX_LLM_TEMPERATURE = 2.0
+# Inference timeouts (REQ-033, REQ-076): connecting, waiting between streamed pieces
+# (the first piece includes prompt processing, slow on CPU), and the whole request.
+# Together they guarantee no request or model call runs indefinitely.
+DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS = 5.0
+DEFAULT_LLM_READ_TIMEOUT_SECONDS = 60.0
+DEFAULT_LLM_REQUEST_TIMEOUT_SECONDS = 180.0
 
 
 class ConfigError(Exception):
@@ -85,6 +91,9 @@ class Settings:
     llm_context_tokens: int = DEFAULT_LLM_CONTEXT_TOKENS
     llm_max_tokens: int = DEFAULT_LLM_MAX_TOKENS
     llm_temperature: float = DEFAULT_LLM_TEMPERATURE
+    llm_connect_timeout_seconds: float = DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
+    llm_read_timeout_seconds: float = DEFAULT_LLM_READ_TIMEOUT_SECONDS
+    llm_request_timeout_seconds: float = DEFAULT_LLM_REQUEST_TIMEOUT_SECONDS
 
 
 def _require(environ: Mapping[str, str], name: str, problems: list[str]) -> str:
@@ -246,6 +255,14 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
     if context_token_budget >= llm_context_tokens:
         problems.append("CONTEXT_TOKEN_BUDGET must be smaller than LLM_CONTEXT_TOKENS")
 
+    def optional_seconds(name: str, default: float) -> float:
+        raw = _optional(environ, name)
+        return _parse_seconds(name, raw, default, problems) if raw else default
+
+    connect_timeout = optional_seconds("LLM_CONNECT_TIMEOUT_SECONDS", DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS)
+    read_timeout = optional_seconds("LLM_READ_TIMEOUT_SECONDS", DEFAULT_LLM_READ_TIMEOUT_SECONDS)
+    request_timeout = optional_seconds("LLM_REQUEST_TIMEOUT_SECONDS", DEFAULT_LLM_REQUEST_TIMEOUT_SECONDS)
+
     if problems:
         raise ConfigError(problems)
     return Settings(
@@ -264,6 +281,9 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
         llm_context_tokens=llm_context_tokens,
         llm_max_tokens=llm_max_tokens,
         llm_temperature=llm_temperature,
+        llm_connect_timeout_seconds=connect_timeout,
+        llm_read_timeout_seconds=read_timeout,
+        llm_request_timeout_seconds=request_timeout,
     )
 
 

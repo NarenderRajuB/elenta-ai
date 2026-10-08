@@ -4,7 +4,7 @@ Decision log required by brief §5.11 (REQ-110, REQ-112). Entries are appended *
 
 **Statuses**: `Proposed` (drafted, awaiting candidate acceptance) · `Accepted` · `Superseded` · `Rejected`.
 
-> **Current state (2026-10-08):** All ADRs below are `Proposed`. They were drafted from the brief before any code was written. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Items that depend on facts not yet verified on the machine (e.g. DMR availability) say so.
+> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-011, ADR-013, ADR-014. Rejected: ADR-003.
 
 Template:
 
@@ -22,7 +22,7 @@ Template:
 
 ## ADR-001: Python 3.12 with FastAPI + Uvicorn for the HTTP service
 
-- **Status:** Proposed · **Date:** 2026-10-08
+- **Status:** Accepted by the candidate on 2026-10-08 · **Date:** 2026-10-08
 - **Requirements:** REQ-030, REQ-031, REQ-033, REQ-093, REQ-094
 
 **Context.** We need an HTTP server that can stream responses, detect client disconnects, and serve a static page. The brief prefers "explicit, human-readable code over unnecessary framework abstraction" (§5.9).
@@ -231,7 +231,7 @@ Template:
 
 ## ADR-011: Configuration via a single env-var module with fail-fast validation
 
-- **Status:** Proposed · **Date:** 2026-10-08
+- **Status:** Accepted by the candidate on 2026-10-08 · **Date:** 2026-10-08
 - **Requirements:** REQ-013, REQ-014, REQ-015, REQ-016
 
 **Decision.** One `config` module reads `os.environ` into a frozen dataclass at startup, validating types, ranges and URL shape; any problem raises a single error listing all invalid/missing variables and the process exits non-zero. `.env.example` documents every variable.
@@ -292,6 +292,25 @@ Template:
 - − Option B: Compose cannot health-check or start the model server. Its state is visible only through the app's readiness signal and logs.
 - − Native Linux reviewers would need `extra_hosts: host.docker.internal:host-gateway` in Compose. To be documented in the platform notes (REQ-046 / REQ-106).
 - Follow-up: Ollama ships a default system prompt in the model (`You are Qwen…`). Our own `system` message replaces it per request; this needs verifying when prompt assembly is built (ADR-006).
+
+---
+
+## ADR-014: uv for Python environment and dependency locking
+
+- **Status:** Accepted by the candidate on 2026-10-08 · **Date:** 2026-10-08
+- **Requirements:** REQ-011, REQ-093, REQ-120, REQ-122
+
+**Context.** We need a reproducible Python 3.12 environment with pinned dependencies, for local tests and later for the container image. On this machine `python3` is a shell alias to another project's Python 3.14 alpha virtualenv, so relying on bare `python3` would silently use the wrong interpreter.
+
+**Decision.** Use `uv` (0.11.24 locally). `.python-version` pins 3.12, `pyproject.toml` declares dependencies, and `uv.lock` (committed) pins exact versions. Tests run with `uv run pytest`. Dependencies are added only when a feature needs them. As of this ADR the only one is `pytest` (dev).
+
+**Rationale.** A single tool covers interpreter selection, the virtualenv and a lockfile. The lockfile gives an exact input for dependency scanning (REQ-122) and for the container build.
+
+**Alternatives rejected.**
+- *`venv` + `pip` + hand-pinned `requirements.txt`*: works, but has no lockfile with hashes for transitive dependencies, and interpreter selection is manual.
+- *Poetry*: similar outcome, heavier tool.
+
+**Consequences.** + Reproducible environment; the wrong interpreter can't be picked up by accident. − Reviewers need `uv` installed to run tests locally (to be listed in Setup). Follow-up: the Dockerfile must install from `uv.lock`, so the image matches the tested environment.
 
 ---
 

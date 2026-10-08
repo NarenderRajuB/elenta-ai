@@ -1,7 +1,8 @@
 # Tests for observability (app/observability.py and the spans emitted by app/chat.py):
 # REQ-080 one trace per request, REQ-081 stage spans, REQ-082 id in logs and error events,
 # REQ-083 per-stage latency and labelled token counts, REQ-084 chunk ids without document
-# text, REQ-068 nothing sensitive in logs or span attributes.
+# text, REQ-068 nothing sensitive in logs or span attributes, REQ-015 / REQ-076 model
+# backend and error type on the trace.
 #
 # Spans are captured with the SDK's in-memory exporter; no collector is needed.
 
@@ -21,7 +22,13 @@ from app.config import load_settings
 from app.corpus import Corpus
 from app.index import IndexCache
 from app.main import create_app
-from app.observability import REQUEST_ID, JsonFormatter, build_tracer_provider, configure_logging
+from app.observability import (
+    REQUEST_ID,
+    JsonFormatter,
+    build_tracer_provider,
+    configure_logging,
+    llm_backend_attributes,
+)
 
 SECRET_DOC = "Employees receive 25 days of annual leave. CONFIDENTIAL-DOC-MARKER-7731"
 SECRET_QUESTION = "annual leave QUESTION-MARKER-4410"
@@ -36,12 +43,12 @@ def sse(*texts, usage=(200, 5)):
     return (out + "data: [DONE]\n\n").encode()
 
 
-def run_chat(tmp_path: Path, question: str, respond, files=None):
+def run_chat(tmp_path: Path, question: str, respond, files=None, llm_url="http://llm.test/v1"):
     for name, text in (files if files is not None else {"leave.md": SECRET_DOC}).items():
         (tmp_path / name).write_text(text, encoding="utf-8")
     settings = load_settings(
         {
-            "LLM_URL": "http://llm.test/v1",
+            "LLM_URL": llm_url,
             "LLM_MODEL": "gemma3:1b",
             "CORPUS_DIR": str(tmp_path),
             "CORPUS_SETTLE_SECONDS": "0",
@@ -231,6 +238,113 @@ class TestFailureTraces:
         spans = {s.name: s for s in exporter.get_finished_spans()}
         assert spans["chat.request"].attributes["chat.outcome"] == "client_disconnected"
         assert spans["inference.stream"].attributes["error.code"] == "client_disconnected"
+
+
+# ---------------------------------------------------------------------------
+# Request latency, model backend and errors on the trace, with nothing sensitive
+# (REQ-015, REQ-068, REQ-076, REQ-083)
+# ---------------------------------------------------------------------------
+
+
+def _dump(all_spans) -> str:
+    return repr([(s.name, dict(s.attributes), [e.attributes for e in s.events]) for s in all_spans])
+
+
+class TestBackendLabel:
+    @pytest.mark.parametrize(
+        ("url", "backend", "address", "port"),
+        [
+            ("http://host.docker.internal:11434/v1", "ollama", "host.docker.internal", 11434),
+            ("http://localhost:11434/v1", "ollama", "localhost", 11434),
+            (
+                "http://model-runner.docker.internal/engines/v1",
+                "docker-model-runner",
+                "model-runner.docker.internal",
+                80,
+            ),
+            ("http://localhost:12434/engines/llama.cpp/v1", "docker-model-runner", "localhost", 12434),
+            ("https://llm.example.com/v1", "openai-compatible", "llm.example.com", 443),
+        ],
+    )
+    def test_positive_backend_derived_from_llm_url(self, url, backend, address, port):
+        assert llm_backend_attributes(url) == {"llm.backend": backend, "server.address": address, "server.port": port}
+
+    def test_negative_credentials_in_url_are_not_in_the_attributes(self):
+        attrs = llm_backend_attributes("http://user:PASSWORD-MARKER-9@localhost:11434/v1")
+        assert attrs == {"llm.backend": "ollama", "server.address": "localhost", "server.port": 11434}
+        assert "PASSWORD-MARKER" not in repr(attrs) and "user" not in repr(attrs)
+
+    @pytest.mark.parametrize(
+        ("url", "backend", "address", "port"),
+        [
+            # Ollama moved to another port: no longer recognisable, labelled generically.
+            ("http://localhost:8080/v1", "openai-compatible", "localhost", 8080),
+            # The DMR path wins over the Ollama port.
+            ("http://localhost:11434/engines/v1", "docker-model-runner", "localhost", 11434),
+            # IPv6 literal: brackets removed, port kept.
+            ("http://[::1]:11434/v1", "ollama", "::1", 11434),
+            # Port 0 is accepted by config validation; it must not fall back to the default.
+            ("http://localhost:0/v1", "openai-compatible", "localhost", 0),
+        ],
+    )
+    def test_edge_unusual_urls(self, url, backend, address, port):
+        assert llm_backend_attributes(url) == {"llm.backend": backend, "server.address": address, "server.port": port}
+
+
+class TestLatencyBackendAndErrorsOnTrace:
+    def test_positive_root_span_names_route_and_records_total_latency(self, tmp_path):
+        spans, _, _ = run_chat(tmp_path, "annual leave", lambda r: httpx.Response(200, content=sse("ok")))
+        root = spans["chat.request"]
+        assert root.attributes["http.route"] == "/chat"
+        assert root.attributes["http.request.method"] == "POST"
+        assert root.attributes["chat.total_ms"] >= 0
+        assert root.end_time >= spans["inference.stream"].end_time
+
+    def test_positive_inference_span_names_backend_and_model(self, tmp_path):
+        spans, _, _ = run_chat(
+            tmp_path,
+            "annual leave",
+            lambda r: httpx.Response(200, content=sse("ok")),
+            llm_url="http://host.docker.internal:11434/v1",
+        )
+        attrs = spans["inference.stream"].attributes
+        assert attrs["llm.backend"] == "ollama"
+        assert attrs["server.address"] == "host.docker.internal"
+        assert attrs["server.port"] == 11434
+        assert attrs["llm.model"] == "gemma3:1b"
+        assert spans["inference.stream"].end_time > spans["inference.stream"].start_time
+
+    def test_negative_unexpected_error_records_type_but_not_message(self, tmp_path):
+        def crash(request):
+            raise RuntimeError("SENSITIVE-ERROR-MARKER-5521")
+
+        spans, events, all_spans = run_chat(tmp_path, "annual leave", crash)
+        root = spans["chat.request"]
+        assert events["error"]["code"] == "internal_error"
+        assert root.status.status_code == StatusCode.ERROR
+        assert root.attributes["chat.outcome"] == "internal_error"
+        assert root.attributes["error.type"] == "RuntimeError"
+        assert "SENSITIVE-ERROR-MARKER" not in _dump(all_spans)
+
+    def test_negative_answer_text_and_credentials_never_in_any_span(self, tmp_path):
+        _, events, all_spans = run_chat(
+            tmp_path,
+            "annual leave",
+            lambda r: httpx.Response(200, content=sse("ANSWER-MARKER-3307 ", "twenty five days")),
+            llm_url="http://user:PASSWORD-MARKER-9@llm.test:11434/v1",
+        )
+        assert "done" in events  # the answer was streamed to the user
+        dump = _dump(all_spans)
+        assert "ANSWER-MARKER" not in dump and "twenty five days" not in dump
+        assert "PASSWORD-MARKER" not in dump and "llm.test:11434/v1" not in dump
+
+    def test_edge_no_evidence_trace_has_no_backend_because_model_not_called(self, tmp_path):
+        spans, _, all_spans = run_chat(
+            tmp_path, "quantum chromodynamics", lambda r: httpx.Response(200, content=sse("x"))
+        )
+        assert spans["chat.request"].attributes["chat.model_called"] is False
+        assert "llm.backend" not in _dump(all_spans)
+        assert "error.type" not in spans["chat.request"].attributes
 
 
 # ---------------------------------------------------------------------------

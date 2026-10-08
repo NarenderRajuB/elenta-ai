@@ -19,8 +19,9 @@
 # `chat.request` has a child span per stage: `corpus.refresh`, `evidence.selection`,
 # `prompt.assembly`, `inference.stream`. The trace id is the request id, shown to the
 # user, carried on every event and log line. Spans record counts, timings, chunk ids
-# and token counts (labelled reported/estimated), never the question, the prompt or
-# document text (REQ-068). Spans are started and ended explicitly instead of being made
+# and token counts (labelled reported/estimated), the model backend (derived from
+# LLM_URL) and error codes; never the question, the prompt, document text, the answer
+# text or the LLM_URL itself (REQ-068). Spans are started and ended explicitly instead of being made
 # "current", because a context attached inside an async generator cannot be detached
 # safely once the generator is closed from another task (client disconnect).
 
@@ -39,7 +40,7 @@ from app.config import Settings
 from app.corpus import Corpus
 from app.index import IndexCache
 from app.inference import Finish, InferenceError, TextDelta, Usage, stream_chat
-from app.observability import REQUEST_ID
+from app.observability import REQUEST_ID, llm_backend_attributes
 from app.output_guard import REFUSAL, OutputGuard
 from app.prompt import PromptTooLarge, assemble
 from app.selection import select
@@ -93,7 +94,10 @@ def _request_id(span: trace.Span) -> str:
 async def answer(question: str, deps: ChatDeps) -> AsyncIterator[dict]:
     s = deps.settings
     tracer = deps.tracer
-    root = tracer.start_span("chat.request", attributes={"chat.question_chars": len(question)})
+    root = tracer.start_span(
+        "chat.request",
+        attributes={"http.request.method": "POST", "http.route": "/chat", "chat.question_chars": len(question)},
+    )
     parent = trace.set_span_in_context(root)
     request_id = _request_id(root)
     root.set_attribute("chat.request_id", request_id)
@@ -245,7 +249,12 @@ async def answer(question: str, deps: ChatDeps) -> AsyncIterator[dict]:
         emitted_chars = 0
         span = stage("inference.stream")
         span.set_attributes(
-            {"llm.model": s.llm_model, "llm.temperature": s.llm_temperature, "llm.max_tokens": s.llm_max_tokens}
+            {
+                "llm.model": s.llm_model,
+                "llm.temperature": s.llm_temperature,
+                "llm.max_tokens": s.llm_max_tokens,
+                **llm_backend_attributes(s.llm_url),
+            }
         )
         root.set_attribute("chat.model_called", True)
         t = time.perf_counter()
@@ -332,10 +341,12 @@ async def answer(question: str, deps: ChatDeps) -> AsyncIterator[dict]:
                 "timings_ms": timings,
             },
         }
-    except Exception:
+    except Exception as exc:
         # Unexpected bug: still end the stream with a terminal event carrying the id.
+        # The trace gets the exception class only; its message could contain data.
         log.exception("chat failed")
         outcome = "internal_error"
+        root.set_attribute("error.type", type(exc).__name__)
         yield _error(request_id, outcome, partial=False)
     finally:
         # Runs on normal completion, on errors and when the client disconnects (the

@@ -93,13 +93,15 @@ Each chat request is **one trace**:
 
 | Span | What it records |
 |---|---|
-| `chat.request` (root) | request id, outcome (`stop`, `insufficient_evidence`, an error code, or `client_disconnected`), model called, total ms |
+| `chat.request` (root) | request id, `http.route` and `http.request.method`, outcome (`stop`, `insufficient_evidence`, an error code, or `client_disconnected`), model called, total ms (end-to-end request latency); `error.type` (exception class only) on an unexpected error |
 | `corpus.refresh` | corpus version, documents, added/modified/removed/unchanged, skipped files with reason |
 | `evidence.selection` | selected chunk ids and files, candidates, budget, used and dropped tokens, truncation, insufficient reason |
 | `prompt.assembly` | estimated prompt tokens and the limit, number of evidence chunks |
-| `inference.stream` | model, temperature, max tokens, first-token time, prompt/completion tokens with source (`reported` or `estimated (chars/4)`), finish reason, guard results; error code on failure |
+| `inference.stream` | model, backend (`llm.backend`: `ollama`, `docker-model-runner` or `openai-compatible`, derived from `LLM_URL`), `server.address` and `server.port`, temperature, max tokens, first-token time, prompt/completion tokens with source (`reported` or `estimated (chars/4)`), finish reason, guard results; error code on failure |
 
-Span durations give per-stage latency. No question text, prompt or document content is ever recorded.
+Span durations give per-stage latency; the `inference.stream` duration is the model inference time. No question text, prompt, document content, answer text, exception message or `LLM_URL` (which could carry credentials) is ever recorded.
+
+**How the backend is labelled.** The backend is selected only by `LLM_URL`, so the label is derived from it: a path starting with `/engines` or the host `model-runner.docker.internal` means Docker Model Runner; port 11434 means Ollama; anything else is `openai-compatible`. A server on a non-default port is labelled by its path only.
 
 **Logs:** one JSON object per line.
 
@@ -213,7 +215,7 @@ Run a single requirement's tests, for example:
 uv run pytest -v tests/test_config.py::TestReq016FailFast
 ```
 
-Current result: **525 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Test-only dev dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The other dev tools are listed below. The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
+Current result: **540 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Test-only dev dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The other dev tools are listed below. The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
 
 ## Code quality and security checks (REQ-120..123)
 
@@ -845,6 +847,19 @@ Tests: `tests/test_observability.py::TestFailureTraces`
 | ❌ | Model unavailable | `inference.stream` and root have status ERROR, `error.code: model_unavailable`; `error` event id = trace id |
 | ❌ | Prompt too large | `prompt.assembly` has `error.code: question_too_long`; no inference span |
 | ⚠️ | Client disconnects mid-answer | Every span still ended; root outcome `client_disconnected` |
+
+### Request latency, model backend and errors on the trace (REQ-015 / REQ-068 / REQ-076 / REQ-083)
+Tests: `tests/test_observability.py::TestBackendLabel`, `::TestLatencyBackendAndErrorsOnTrace`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | `LLM_URL` for Ollama (`:11434/v1`), Docker Model Runner (`/engines/...`) or another server | `llm.backend` `ollama` / `docker-model-runner` / `openai-compatible`, with host and port |
+| ✅ | A chat request | Root has `http.route=/chat`, `http.request.method=POST`, `chat.total_ms`; inference span has backend, model and a duration |
+| ❌ | Credentials in `LLM_URL` | Not in the attributes or any span; the URL itself is never recorded |
+| ❌ | Unexpected exception with a marker in its message | Root ERROR, outcome `internal_error`, `error.type=RuntimeError`; the message appears in no span |
+| ❌ | Marker in the model's answer | Appears in no span |
+| ⚠️ | Ollama on another port; DMR path on port 11434; IPv6 host; port 0 | `openai-compatible`; `docker-model-runner` (path wins); host `::1`; port 0 kept |
+| ⚠️ | No evidence, model not called | No backend attribute, no `error.type` |
 
 ### REQ-082 / REQ-068: Structured logs with the request id
 Tests: `tests/test_observability.py::TestJsonLogs`

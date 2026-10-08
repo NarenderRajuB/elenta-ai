@@ -19,6 +19,7 @@ import json
 import logging
 import sys
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 
 import requests
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -35,6 +36,35 @@ REQUEST_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("request
 
 # Attributes every LogRecord has; anything else on a record came from `extra=`.
 _STANDARD = set(vars(logging.LogRecord("", 0, "", 0, "", None, None))) | {"message", "asctime", "taskName"}
+
+
+# Default port of each backend's OpenAI-compatible endpoint, used to label the backend.
+OLLAMA_PORT = 11434
+DMR_HOST = "model-runner.docker.internal"
+
+
+def llm_backend_attributes(llm_url: str) -> dict[str, str | int]:
+    """Span attributes naming the model backend, derived from LLM_URL.
+
+    The backend is chosen only by LLM_URL (REQ-015), so it is derived from it here:
+    Docker Model Runner serves its OpenAI-compatible API under `/engines/...` (and is
+    reached as model-runner.docker.internal from containers); Ollama listens on port
+    11434. Anything else is labelled `openai-compatible`. This is a documented
+    heuristic: a server on a non-default port is labelled by its path only.
+
+    Only host and port are recorded. The URL itself is not, because it could carry
+    credentials in its user-info or query string (TS-007).
+    """
+    parts = urlsplit(llm_url)
+    port = parts.port if parts.port is not None else (443 if parts.scheme == "https" else 80)
+    host = parts.hostname or ""
+    if host == DMR_HOST or parts.path.startswith("/engines"):
+        backend = "docker-model-runner"
+    elif port == OLLAMA_PORT:
+        backend = "ollama"
+    else:
+        backend = "openai-compatible"
+    return {"llm.backend": backend, "server.address": host, "server.port": port}
 
 
 class JsonFormatter(logging.Formatter):

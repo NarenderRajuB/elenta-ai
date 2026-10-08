@@ -29,17 +29,24 @@ STAGES = ["corpus.refresh", "evidence.selection", "prompt.assembly", "inference.
 
 
 def sse(*texts, usage=(200, 5)):
-    out = "".join(f'data: {json.dumps({"choices": [{"delta": {"content": t}}]})}\n\n' for t in texts)
+    out = "".join(f"data: {json.dumps({'choices': [{'delta': {'content': t}}]})}\n\n" for t in texts)
     if usage:
-        out += f'data: {json.dumps({"choices": [], "usage": {"prompt_tokens": usage[0], "completion_tokens": usage[1]}})}\n\n'
+        counts = {"prompt_tokens": usage[0], "completion_tokens": usage[1]}
+        out += f"data: {json.dumps({'choices': [], 'usage': counts})}\n\n"
     return (out + "data: [DONE]\n\n").encode()
 
 
 def run_chat(tmp_path: Path, question: str, respond, files=None):
     for name, text in (files if files is not None else {"leave.md": SECRET_DOC}).items():
         (tmp_path / name).write_text(text, encoding="utf-8")
-    settings = load_settings({"LLM_URL": "http://llm.test/v1", "LLM_MODEL": "gemma3:1b",
-                              "CORPUS_DIR": str(tmp_path), "CORPUS_SETTLE_SECONDS": "0"})
+    settings = load_settings(
+        {
+            "LLM_URL": "http://llm.test/v1",
+            "LLM_MODEL": "gemma3:1b",
+            "CORPUS_DIR": str(tmp_path),
+            "CORPUS_SETTLE_SECONDS": "0",
+        }
+    )
     exporter = InMemorySpanExporter()
 
     def handler(request):
@@ -60,6 +67,7 @@ def run_chat(tmp_path: Path, question: str, respond, files=None):
 # REQ-080 / REQ-081: one trace per request with a span per stage
 # ---------------------------------------------------------------------------
 
+
 class TestTraceStructure:
     def test_positive_one_trace_root_and_four_stage_spans(self, tmp_path):
         spans, _, all_spans = run_chat(tmp_path, "annual leave", lambda r: httpx.Response(200, content=sse("25 days")))
@@ -79,11 +87,20 @@ class TestTraceStructure:
 
     def test_negative_two_requests_two_separate_traces(self, tmp_path):
         (tmp_path / "leave.md").write_text(SECRET_DOC, encoding="utf-8")
-        settings = load_settings({"LLM_URL": "http://llm.test/v1", "LLM_MODEL": "m", "CORPUS_DIR": str(tmp_path),
-                                  "CORPUS_SETTLE_SECONDS": "0"})
+        settings = load_settings(
+            {
+                "LLM_URL": "http://llm.test/v1",
+                "LLM_MODEL": "m",
+                "CORPUS_DIR": str(tmp_path),
+                "CORPUS_SETTLE_SECONDS": "0",
+            }
+        )
         exporter = InMemorySpanExporter()
-        app = create_app(settings, transport=httpx.MockTransport(lambda r: httpx.Response(200, content=sse("ok"))),
-                         span_exporter=exporter)
+        app = create_app(
+            settings,
+            transport=httpx.MockTransport(lambda r: httpx.Response(200, content=sse("ok"))),
+            span_exporter=exporter,
+        )
         with TestClient(app) as client:
             client.post("/chat", json={"question": "annual leave"})
             client.post("/chat", json={"question": "annual leave"})
@@ -101,21 +118,28 @@ class TestTraceStructure:
 # REQ-083 / REQ-084: latency, labelled token counts, chunk ids
 # ---------------------------------------------------------------------------
 
+
 class TestSpanContent:
     def test_positive_reported_token_counts_on_inference_span(self, tmp_path):
-        spans, _, _ = run_chat(tmp_path, "annual leave", lambda r: httpx.Response(200, content=sse("ok", usage=(321, 9))))
+        spans, _, _ = run_chat(
+            tmp_path, "annual leave", lambda r: httpx.Response(200, content=sse("ok", usage=(321, 9)))
+        )
         a = spans["inference.stream"].attributes
         assert (a["llm.prompt_tokens"], a["llm.completion_tokens"], a["llm.token_count_source"]) == (321, 9, "reported")
         assert a["llm.model"] == "gemma3:1b" and a["llm.first_token_ms"] >= 0
 
     def test_positive_estimated_counts_labelled(self, tmp_path):
-        spans, _, _ = run_chat(tmp_path, "annual leave", lambda r: httpx.Response(200, content=sse("abcdefgh", usage=None)))
+        spans, _, _ = run_chat(
+            tmp_path, "annual leave", lambda r: httpx.Response(200, content=sse("abcdefgh", usage=None))
+        )
         assert spans["inference.stream"].attributes["llm.token_count_source"] == "estimated (chars/4)"
         assert spans["prompt.assembly"].attributes["prompt.token_count_method"] == "chars/4"
 
     def test_positive_selected_chunk_ids_match_sources_event(self, tmp_path):
         spans, events, _ = run_chat(tmp_path, "annual leave", lambda r: httpx.Response(200, content=sse("ok")))
-        assert list(spans["evidence.selection"].attributes["selection.chunk_ids"]) == [c["id"] for c in events["sources"]["chunks"]]
+        assert list(spans["evidence.selection"].attributes["selection.chunk_ids"]) == [
+            c["id"] for c in events["sources"]["chunks"]
+        ]
 
     def test_positive_every_span_has_a_duration(self, tmp_path):
         _, _, all_spans = run_chat(tmp_path, "annual leave", lambda r: httpx.Response(200, content=sse("ok")))
@@ -137,10 +161,12 @@ class TestSpanContent:
 # Failure paths are visible in the trace (REQ-076, REQ-033)
 # ---------------------------------------------------------------------------
 
+
 class TestFailureTraces:
     def test_negative_model_unavailable_marks_spans_as_errors(self, tmp_path):
         def refuse(request):
             raise httpx.ConnectError("refused")
+
         spans, events, _ = run_chat(tmp_path, "annual leave", refuse)
         assert spans["inference.stream"].status.status_code == StatusCode.ERROR
         assert spans["inference.stream"].attributes["error.code"] == "model_unavailable"
@@ -150,12 +176,23 @@ class TestFailureTraces:
 
     def test_negative_prompt_too_large_recorded(self, tmp_path):
         (tmp_path / "leave.md").write_text(SECRET_DOC, encoding="utf-8")
-        settings = load_settings({"LLM_URL": "http://llm.test/v1", "LLM_MODEL": "m", "CORPUS_DIR": str(tmp_path),
-                                  "CORPUS_SETTLE_SECONDS": "0", "LLM_CONTEXT_TOKENS": "2000", "LLM_MAX_TOKENS": "300",
-                                  "CONTEXT_TOKEN_BUDGET": "1000"})
+        settings = load_settings(
+            {
+                "LLM_URL": "http://llm.test/v1",
+                "LLM_MODEL": "m",
+                "CORPUS_DIR": str(tmp_path),
+                "CORPUS_SETTLE_SECONDS": "0",
+                "LLM_CONTEXT_TOKENS": "2000",
+                "LLM_MAX_TOKENS": "300",
+                "CONTEXT_TOKEN_BUDGET": "1000",
+            }
+        )
         exporter = InMemorySpanExporter()
-        app = create_app(settings, transport=httpx.MockTransport(lambda r: httpx.Response(200, content=sse("x"))),
-                         span_exporter=exporter)
+        app = create_app(
+            settings,
+            transport=httpx.MockTransport(lambda r: httpx.Response(200, content=sse("x"))),
+            span_exporter=exporter,
+        )
         with TestClient(app) as client:
             client.post("/chat", json={"question": "annual leave " + "why " * 1700})
         spans = {s.name: s for s in exporter.get_finished_spans()}
@@ -164,15 +201,25 @@ class TestFailureTraces:
 
     def test_edge_client_disconnect_still_ends_every_span(self, tmp_path):
         (tmp_path / "leave.md").write_text(SECRET_DOC, encoding="utf-8")
-        settings = load_settings({"LLM_URL": "http://llm.test/v1", "LLM_MODEL": "m", "CORPUS_DIR": str(tmp_path),
-                                  "CORPUS_SETTLE_SECONDS": "0"})
+        settings = load_settings(
+            {
+                "LLM_URL": "http://llm.test/v1",
+                "LLM_MODEL": "m",
+                "CORPUS_DIR": str(tmp_path),
+                "CORPUS_SETTLE_SECONDS": "0",
+            }
+        )
         exporter = InMemorySpanExporter()
         provider = build_tracer_provider(None, exporter)
         body = sse(*[f"w{i} " for i in range(100)])
 
         async def main():
-            async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, content=body))) as client:
-                deps = ChatDeps(settings, Corpus(str(tmp_path), 10**6, 500, 0.0), IndexCache(800), client, provider.get_tracer("t"))
+            async with httpx.AsyncClient(
+                transport=httpx.MockTransport(lambda r: httpx.Response(200, content=body))
+            ) as client:
+                deps = ChatDeps(
+                    settings, Corpus(str(tmp_path), 10**6, 500, 0.0), IndexCache(800), client, provider.get_tracer("t")
+                )
                 gen = answer("annual leave", deps)
                 async for event in gen:
                     if event["event"] == "token":
@@ -189,6 +236,7 @@ class TestFailureTraces:
 # ---------------------------------------------------------------------------
 # REQ-082 / REQ-068: structured logs carry the request id, never sensitive text
 # ---------------------------------------------------------------------------
+
 
 def _record(msg="hello", **extra):
     record = logging.LogRecord("app.test", logging.INFO, __file__, 1, msg, None, None)
@@ -238,6 +286,7 @@ class TestJsonLogs:
             raise ValueError("boom")
         except ValueError:
             import sys
+
             record = _record("failed", obj=object())
             record.exc_info = sys.exc_info()
         entry = json.loads(JsonFormatter().format(record))
@@ -258,6 +307,7 @@ class TestJsonLogs:
 # ---------------------------------------------------------------------------
 # Exporter configuration (REQ-085, REQ-012)
 # ---------------------------------------------------------------------------
+
 
 class TestExporterConfig:
     def test_positive_spans_exported_directly_even_with_proxy_env(self, monkeypatch):
@@ -299,7 +349,9 @@ class TestExporterConfig:
         assert provider._active_span_processor._span_processors == ()
         provider.shutdown()
 
-    @pytest.mark.parametrize("value, ok", [("http://jaeger:4318/v1/traces", True), ("ftp://x", False), ("jaeger:4318", False)])
+    @pytest.mark.parametrize(
+        "value, ok", [("http://jaeger:4318/v1/traces", True), ("ftp://x", False), ("jaeger:4318", False)]
+    )
     def test_edge_otlp_url_validated(self, value, ok):
         env = {"LLM_URL": "http://h/v1", "LLM_MODEL": "m", "OTLP_TRACES_URL": value}
         if ok:

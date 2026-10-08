@@ -31,6 +31,7 @@ def _env_example() -> dict[str, str]:
 # REQ-013: all application configuration comes from environment variables
 # ---------------------------------------------------------------------------
 
+
 class TestReq013EnvOnly:
     def test_positive_settings_built_from_env_mapping(self):
         settings = load_settings(VALID)
@@ -68,6 +69,7 @@ class TestReq013EnvOnly:
 # REQ-014: .env.example is a complete reference with safe example values
 # ---------------------------------------------------------------------------
 
+
 class TestReq014EnvExample:
     def test_positive_lists_exactly_the_settings_fields(self):
         assert set(_env_example()) == {f.name.upper() for f in fields(Settings)}
@@ -92,13 +94,14 @@ class TestReq014EnvExample:
 # REQ-015: LLM_URL and LLM_MODEL drive the client; switching needs no code change
 # ---------------------------------------------------------------------------
 
+
 class TestReq015EndpointSwitching:
     @pytest.mark.parametrize(
         "url, model",
         [
-            ("http://host.docker.internal:11434/v1", "qwen2.5:0.5b"),            # Ollama on host
+            ("http://host.docker.internal:11434/v1", "qwen2.5:0.5b"),  # Ollama on host
             ("http://model-runner.docker.internal/engines/v1", "ai/example:Q4_K_M"),  # DMR
-            ("https://llm.internal.example/v1", "example-model"),               # any compatible endpoint
+            ("https://llm.internal.example/v1", "example-model"),  # any compatible endpoint
         ],
     )
     def test_positive_any_compatible_endpoint_by_env_only(self, url, model):
@@ -128,6 +131,7 @@ class TestReq015EndpointSwitching:
 # ---------------------------------------------------------------------------
 # REQ-016: fail fast with a clear error on missing or invalid configuration
 # ---------------------------------------------------------------------------
+
 
 class TestReq016FailFast:
     def test_positive_valid_config_raises_nothing(self):
@@ -191,6 +195,7 @@ class TestReq016FailFast:
 # REQ-013 (from env), REQ-016 (invalid values fail fast), REQ-017 (probe timeout)
 # ---------------------------------------------------------------------------
 
+
 class TestOptionalSettings:
     def test_positive_defaults_when_unset(self):
         s = load_settings(VALID)
@@ -205,6 +210,7 @@ class TestOptionalSettings:
         monkeypatch.setenv("LLM_MODEL", VALID["LLM_MODEL"])
         monkeypatch.setenv("APP_PORT", "8123")
         from app.config import load_settings_from_process_env
+
         assert load_settings_from_process_env().app_port == 8123
 
     @pytest.mark.parametrize("port", ["0", "65536", "-1", "abc", "8000.5", "80 80"])
@@ -241,17 +247,33 @@ class TestOptionalSettings:
 # CORPUS_SETTLE_SECONDS): REQ-013, REQ-016, REQ-041 limits, REQ-045 settle window
 # ---------------------------------------------------------------------------
 
+
 class TestCorpusSettings:
     def test_positive_defaults(self):
         s = load_settings(VALID)
         assert (s.corpus_dir, s.corpus_max_file_bytes, s.corpus_max_files, s.corpus_settle_seconds) == (
-            "/data", 50 * 1024 * 1024, 500, 0.5)
+            "/data",
+            50 * 1024 * 1024,
+            500,
+            0.5,
+        )
 
     def test_positive_overrides(self):
-        s = load_settings({**VALID, "CORPUS_DIR": "/srv/docs", "CORPUS_MAX_FILE_BYTES": "2048",
-                           "CORPUS_MAX_FILES": "10", "CORPUS_SETTLE_SECONDS": "2"})
+        s = load_settings(
+            {
+                **VALID,
+                "CORPUS_DIR": "/srv/docs",
+                "CORPUS_MAX_FILE_BYTES": "2048",
+                "CORPUS_MAX_FILES": "10",
+                "CORPUS_SETTLE_SECONDS": "2",
+            }
+        )
         assert (s.corpus_dir, s.corpus_max_file_bytes, s.corpus_max_files, s.corpus_settle_seconds) == (
-            "/srv/docs", 2048, 10, 2.0)
+            "/srv/docs",
+            2048,
+            10,
+            2.0,
+        )
 
     def test_positive_relative_corpus_dir_made_absolute(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
@@ -275,7 +297,9 @@ class TestCorpusSettings:
         s = load_settings({**VALID, "CORPUS_MAX_FILE_BYTES": "1", "CORPUS_MAX_FILES": "1"})
         assert (s.corpus_max_file_bytes, s.corpus_max_files) == (1, 1)
 
-    @pytest.mark.parametrize("name", ["CORPUS_DIR", "CORPUS_MAX_FILE_BYTES", "CORPUS_MAX_FILES", "CORPUS_SETTLE_SECONDS"])
+    @pytest.mark.parametrize(
+        "name", ["CORPUS_DIR", "CORPUS_MAX_FILE_BYTES", "CORPUS_MAX_FILES", "CORPUS_SETTLE_SECONDS"]
+    )
     def test_edge_blank_uses_default(self, name):
         assert load_settings({**VALID, name: "  "}) == load_settings(VALID)
 
@@ -289,13 +313,16 @@ class TestCorpusSettings:
 # REQ-055 explicit budget, REQ-050 selection, REQ-016 fail fast
 # ---------------------------------------------------------------------------
 
+
 class TestSelectionSettings:
     def test_positive_defaults(self):
         s = load_settings(VALID)
         assert (s.chunk_max_chars, s.context_token_budget, s.selection_min_score) == (800, 1500, 0.0)
 
     def test_positive_overrides(self):
-        s = load_settings({**VALID, "CHUNK_MAX_CHARS": "400", "CONTEXT_TOKEN_BUDGET": "900", "SELECTION_MIN_SCORE": "1.25"})
+        s = load_settings(
+            {**VALID, "CHUNK_MAX_CHARS": "400", "CONTEXT_TOKEN_BUDGET": "900", "SELECTION_MIN_SCORE": "1.25"}
+        )
         assert (s.chunk_max_chars, s.context_token_budget, s.selection_min_score) == (400, 900, 1.25)
 
     @pytest.mark.parametrize("name", ["CHUNK_MAX_CHARS", "CONTEXT_TOKEN_BUDGET"])
@@ -321,6 +348,7 @@ class TestSelectionSettings:
 # ---------------------------------------------------------------------------
 # Context accounting (LLM_CONTEXT_TOKENS, LLM_MAX_TOKENS): REQ-055, REQ-071, REQ-016
 # ---------------------------------------------------------------------------
+
 
 class TestContextSettings:
     def test_positive_defaults_match_ollama_pin(self):
@@ -354,6 +382,7 @@ class TestContextSettings:
 # LLM_TEMPERATURE: TS-006 mitigation (repeatable answers); REQ-016 fail fast
 # ---------------------------------------------------------------------------
 
+
 class TestTemperatureSetting:
     def test_positive_default_is_zero(self):
         assert load_settings(VALID).llm_temperature == 0.0
@@ -380,12 +409,17 @@ class TestTemperatureSetting:
 # Inference timeouts: REQ-033 / REQ-076 (no call runs indefinitely), REQ-016
 # ---------------------------------------------------------------------------
 
+
 class TestInferenceTimeouts:
-    NAMES = ["LLM_CONNECT_TIMEOUT_SECONDS", "LLM_READ_TIMEOUT_SECONDS", "LLM_REQUEST_TIMEOUT_SECONDS"]
+    NAMES = ("LLM_CONNECT_TIMEOUT_SECONDS", "LLM_READ_TIMEOUT_SECONDS", "LLM_REQUEST_TIMEOUT_SECONDS")
 
     def test_positive_defaults(self):
         s = load_settings(VALID)
-        assert (s.llm_connect_timeout_seconds, s.llm_read_timeout_seconds, s.llm_request_timeout_seconds) == (5.0, 60.0, 180.0)
+        assert (s.llm_connect_timeout_seconds, s.llm_read_timeout_seconds, s.llm_request_timeout_seconds) == (
+            5.0,
+            60.0,
+            180.0,
+        )
 
     @pytest.mark.parametrize("name", NAMES)
     def test_positive_override(self, name):

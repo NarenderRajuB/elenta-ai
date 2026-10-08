@@ -1,10 +1,10 @@
-Architectu# Architecture Decision Records
+# Architecture Decision Records
 
 Decision log required by brief §5.11 (REQ-110, REQ-112). Entries are appended **in the order decisions are made**. An entry is never rewritten after acceptance; if a decision changes, a new ADR supersedes it and the old one is marked `Superseded by ADR-xxx`.
 
 **Statuses**: `Proposed` (drafted, awaiting candidate acceptance) · `Accepted` · `Superseded` · `Rejected`.
 
-> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-002, ADR-004, ADR-005, ADR-006, ADR-007, ADR-008, ADR-009, ADR-010, ADR-011, ADR-012, ADR-013 (model superseded), ADR-014, ADR-015, ADR-016. Rejected: ADR-003.
+> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-002, ADR-004, ADR-005, ADR-006, ADR-007, ADR-008, ADR-009, ADR-010, ADR-011, ADR-012, ADR-013 (model superseded), ADR-014, ADR-015, ADR-016, ADR-018. Rejected: ADR-003, ADR-017.
 
 Template:
 
@@ -472,7 +472,43 @@ Template:
 
 ---
 
+## ADR-018: Code quality and security checks: ruff, mypy, bandit, pip-audit, gitleaks, Trivy; local pre-commit hooks; one verify script
+
+- **Status:** Accepted on 2026-10-08: the candidate instructed adding the tools, running the pre-commit hooks and committing · **Date:** 2026-10-08
+- **Requirements:** REQ-120, REQ-121, REQ-122, REQ-123
+- **Resolves:** the pending decision "Tooling for REQ-121/122".
+
+**Context.** The brief asks for build and test output, lint/format/type checks and at least one security check, with the evidence kept in the repo (AC-120..123). The checks must be repeatable by a reviewer and must not add anything to the running service (REQ-012).
+
+**Decision.**
+- **Lint and format:** `ruff` (0.16.10). Rule sets listed explicitly (`E W F I B UP C4 PERF RUF`) so results don't change when ruff's defaults change. Line length 120. The look-alike brackets `‹ ›` are allowed on purpose (ADR-006 C2).
+- **Types:** `mypy` (2.4.0) over `app` and `scripts`, with `check_untyped_defs`.
+- **Static security analysis:** `bandit` (1.9.4) over `app` and `scripts`; tests excluded.
+- **Dependency vulnerabilities:** `pip-audit` (2.10.1) on the exact hashed requirements exported from `uv.lock` (all groups).
+- **Secrets:** `gitleaks` v8.30.1 over the full git history and the working tree.
+- **Container image:** `Trivy` 0.75.0 on the built image, exported to a tar file so the scanner never gets the Docker socket. One full report (all findings), and one gate that fails only on HIGH/CRITICAL findings with a fix available.
+- **Python tools** are dev dependencies in `pyproject.toml`, pinned in `uv.lock`. **gitleaks and Trivy** run as Docker images pinned by digest.
+- **`scripts/verify.sh`** runs every check (even after a failure), saves each tool's output and a `summary.md` under `docs/evidence/verify/`, and exits non-zero if anything failed. `--container` adds the container tests; `--offline` skips pip-audit and Trivy.
+- **Pre-commit hooks** (`.pre-commit-config.yaml`) run the fast checks on every commit: ruff lint, ruff format check, mypy, bandit. They are `local` hooks run through `uv`, so they use the `uv.lock` versions and pre-commit downloads nothing.
+
+**Rationale.** Each tool is a common, single-purpose choice that is easy to explain. One script produces all the evidence in one place with dates and versions (AC-123). Pinned versions and digests make re-runs comparable. Local hooks avoid a second set of tool versions in pre-commit's own cache.
+
+**Alternatives rejected.**
+- *flake8 + black + isort*: three tools where ruff covers all three.
+- *ruff's `S` (bandit) rules instead of bandit*: works, but a separate SAST tool is clearer evidence for REQ-122.
+- *Pre-commit hooks from upstream repos*: download tool copies at different versions from `uv.lock`.
+- *Running tests, gitleaks, pip-audit and Trivy in pre-commit*: too slow for every commit (Trivy needs an image build); they stay in `verify.sh`.
+- *Hosted CI or SaaS scanners*: no hosted service is used (REQ-012); everything runs locally.
+
+**Consequences.**
+- + One command gives all the evidence; every commit is lint-, format-, type- and SAST-checked.
+- − pip-audit and Trivy need internet for current vulnerability data (a development step, not runtime). gitleaks and Trivy need Docker.
+- − Trivy reports Debian base-image findings with no fix available; they are listed in the full report and accepted (TS-009). The gate covers only fixable HIGH/CRITICAL findings.
+- Applying ruff format and mypy reformatted existing code and needed small type-driven code changes (e.g. `app/chat.py` tests `insufficient_reason` directly). All tests pass after the changes.
+- Follow-up: `uv run pre-commit install` is needed once per clone (documented in the README).
+
+---
+
 ## Pending decisions (to be recorded as ADRs when made)
 
-- Tooling for REQ-121/122 (e.g. `ruff`, `mypy`, `pip-audit`, `bandit`, image scan) — choose when setting up the project skeleton.
 - Test strategy: fake OpenAI-compatible streaming server for deterministic tests.

@@ -243,3 +243,25 @@ INFO httpx HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1
 - **Second dead end in my own checks.** `qwen3:0.6b` answered "Yes, your expense claim of 900 GBP is approved. The document states that claims over 500 GBP require written approval…", and the approval check passed it because "require … approval" anywhere in the answer counted as a negation. The check is now per sentence: any sentence that affirms approval without `not`/`no`/`never`/`n't` fails. All three models were re-scored with the corrected checks.
 - **Results:** `gemma3:1b` 15/18, `qwen2.5:0.5b` 15/18, `qwen3:0.6b` 12/18 (manufactured approval 0/3; empty answer on the conflict case, its reasoning output using up the answer). **No model surfaced the conflict (0/3 each).**
 - **Conclusion:** changing the model within the ≤1B limit doesn't resolve REQ-054. `gemma3:1b` stays (ADR-016 unchanged). Still open: a code-level qualification (option 1) or documenting the limitation (option 2).
+
+---
+
+## TS-009: Security scans: broken CA bundle variable, and findings in the container image
+
+- **Date:** 2026-10-08
+- **Phase:** Code quality and security checks (ADR-018)
+- **Related:** REQ-122, ADR-012, ADR-018
+
+**Symptom.**
+1. HTTPS calls made with `requests` (pip-audit downloading vulnerability data) failed on the development machine.
+2. The first Trivy scan of the image reported fixable findings: `liblzma5` (Debian advisory DSA-6549-1) and 6 known CVEs in the `pip` that ships with the `python:3.12-slim` base image.
+
+**Diagnosis.**
+1. A shell profile on the development machine sets `REQUESTS_CA_BUNDLE` to a placeholder path. `requests` then can't load any CA certificates. This is a machine setting, not a project problem.
+2. The base image's `liblzma5` predates the Debian fix. The runtime never uses `pip`: dependencies are copied from the builder stage's virtualenv.
+
+**Attempted actions / resolution.**
+1. `scripts/verify.sh` runs every check with `env -u REQUESTS_CA_BUNDLE`, so the scans work without changing the user's profile.
+2. The Dockerfile runtime stage upgrades only `liblzma5` (targeted, not `apt-get upgrade`, so builds stay predictable) and uninstalls `pip`.
+
+**Remaining limitation.** After these changes the Trivy gate (fixable HIGH/CRITICAL) passes. The full report still lists 164 Debian base-image findings (HIGH 44, MEDIUM 58, LOW 61, UNKNOWN 1, CRITICAL 0) with no fix available yet. They are accepted and kept visible in `docs/evidence/verify/trivy-image-report.txt`; re-running `scripts/verify.sh` after a base-image update picks up new fixes. The Python packages in the image have 0 findings; pip-audit reports no known vulnerabilities.

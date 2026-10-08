@@ -118,7 +118,7 @@ def _validate_url(name: str, value: str, problems: list[str]) -> str:
     # urlsplit does not validate the port until .port is read; reading it here
     # turns a bad port into a startup error instead of a failure on the first request.
     try:
-        parts.port
+        _ = parts.port  # read only to trigger urlsplit's port validation
     except ValueError:
         problems.append(f"{name} has an invalid port (must be a number from 0 to 65535)")
         return value
@@ -246,7 +246,9 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
     raw_temperature = _optional(environ, "LLM_TEMPERATURE")
     llm_temperature = DEFAULT_LLM_TEMPERATURE
     if raw_temperature:
-        llm_temperature = _parse_non_negative_float("LLM_TEMPERATURE", raw_temperature, DEFAULT_LLM_TEMPERATURE, problems)
+        llm_temperature = _parse_non_negative_float(
+            "LLM_TEMPERATURE", raw_temperature, DEFAULT_LLM_TEMPERATURE, problems
+        )
         if llm_temperature > MAX_LLM_TEMPERATURE:
             problems.append(f"LLM_TEMPERATURE must be at most {MAX_LLM_TEMPERATURE:g}")
             llm_temperature = DEFAULT_LLM_TEMPERATURE

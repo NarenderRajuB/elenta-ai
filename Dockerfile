@@ -25,6 +25,16 @@ RUN uv sync --frozen --no-dev --no-install-project
 # --- runtime -------------------------------------------------------------------
 FROM ${PYTHON_IMAGE}
 
+# Image hardening from the container scan (TS-009, REQ-122):
+# - upgrade only the OS packages that have a published security fix (Trivy: liblzma5,
+#   DSA-6549-1); targeted rather than `apt-get upgrade` so builds stay predictable;
+# - remove pip: the runtime never installs packages (dependencies come from the builder
+#   stage's virtualenv), and the base image's pip carried 6 known CVEs.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends --only-upgrade liblzma5 \
+ && rm -rf /var/lib/apt/lists/* \
+ && python -m pip uninstall -y pip
+
 # Fixed non-root UID/GID so file ownership and `id -u` checks are predictable (REQ-066).
 RUN groupadd --system --gid 10001 app \
  && useradd --system --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app

@@ -27,16 +27,22 @@ LEAVE = "Employees receive 25 days of annual leave per calendar year."
 
 
 def settings_for(corpus: Path, **extra):
-    env = {"LLM_URL": "http://llm.test/v1", "LLM_MODEL": "gemma3:1b", "CORPUS_DIR": str(corpus),
-           "CORPUS_SETTLE_SECONDS": "0", **extra}
+    env = {
+        "LLM_URL": "http://llm.test/v1",
+        "LLM_MODEL": "gemma3:1b",
+        "CORPUS_DIR": str(corpus),
+        "CORPUS_SETTLE_SECONDS": "0",
+        **extra,
+    }
     return load_settings(env)
 
 
 def sse_body(*texts: str, usage: tuple[int, int] | None = (120, 6), finish: str = "stop") -> bytes:
-    out = "".join(f'data: {json.dumps({"choices": [{"delta": {"content": t}}]})}\n\n' for t in texts)
-    out += f'data: {json.dumps({"choices": [{"delta": {}, "finish_reason": finish}]})}\n\n'
+    out = "".join(f"data: {json.dumps({'choices': [{'delta': {'content': t}}]})}\n\n" for t in texts)
+    out += f"data: {json.dumps({'choices': [{'delta': {}, 'finish_reason': finish}]})}\n\n"
     if usage:
-        out += f'data: {json.dumps({"choices": [], "usage": {"prompt_tokens": usage[0], "completion_tokens": usage[1]}})}\n\n'
+        counts = {"prompt_tokens": usage[0], "completion_tokens": usage[1]}
+        out += f"data: {json.dumps({'choices': [], 'usage': counts})}\n\n"
     return (out + "data: [DONE]\n\n").encode()
 
 
@@ -70,7 +76,9 @@ def ask(tmp_path: Path, files: dict[str, str | bytes], question: str, upstream: 
     app = create_app(settings_for(tmp_path, **extra), transport=httpx.MockTransport(upstream))
     with TestClient(app) as client:
         response = client.post("/chat", json={"question": question})
-    return response, (parse(response.text) if response.headers.get("content-type", "").startswith("text/event-stream") else None)
+    return response, (
+        parse(response.text) if response.headers.get("content-type", "").startswith("text/event-stream") else None
+    )
 
 
 def names(events):
@@ -84,6 +92,7 @@ def answer_text(events):
 # ---------------------------------------------------------------------------
 # REQ-030 / REQ-032 / REQ-051: grounded answer, framing, sources
 # ---------------------------------------------------------------------------
+
 
 class TestGroundedAnswer:
     def test_positive_event_sequence_and_content(self, tmp_path):
@@ -113,7 +122,9 @@ class TestGroundedAnswer:
         done = dict(events)["done"]
         assert done["tokens"] == {"prompt": 321, "completion": 7, "source": "reported"}
         assert done["model_called"] is True and done["finish_reason"] == "stop"
-        assert {"corpus_refresh_ms", "selection_ms", "prompt_assembly_ms", "inference_ms", "first_token_ms"} <= set(done["timings_ms"])
+        assert {"corpus_refresh_ms", "selection_ms", "prompt_assembly_ms", "inference_ms", "first_token_ms"} <= set(
+            done["timings_ms"]
+        )
 
     def test_positive_prompt_sent_to_model_has_hierarchy_and_settings(self, tmp_path):
         up = Upstream(lambda r: httpx.Response(200, content=sse_body("ok")))
@@ -147,12 +158,16 @@ class TestGroundedAnswer:
 # REQ-053 / REQ-075: no evidence -> fixed reply, model not called (C6)
 # ---------------------------------------------------------------------------
 
+
 class TestNoEvidence:
-    @pytest.mark.parametrize("files, question, reason", [
-        ({}, "annual leave", "empty_corpus"),
-        ({"leave.md": LEAVE}, "what is the", "no_meaningful_terms"),
-        ({"leave.md": LEAVE}, "capital of France", "no_relevant_evidence"),
-    ])
+    @pytest.mark.parametrize(
+        "files, question, reason",
+        [
+            ({}, "annual leave", "empty_corpus"),
+            ({"leave.md": LEAVE}, "what is the", "no_meaningful_terms"),
+            ({"leave.md": LEAVE}, "capital of France", "no_relevant_evidence"),
+        ],
+    )
     def test_negative_fixed_reply_without_model_call(self, tmp_path, files, question, reason):
         up = Upstream(lambda r: httpx.Response(200, content=sse_body("SHOULD NOT APPEAR")))
         _, events = ask(tmp_path, files, question, up)
@@ -166,6 +181,7 @@ class TestNoEvidence:
 # ---------------------------------------------------------------------------
 # REQ-055 / REQ-056: budget and skipped files visible to the user
 # ---------------------------------------------------------------------------
+
 
 class TestVisibility:
     def test_positive_budget_and_truncation_reported(self, tmp_path):
@@ -192,6 +208,7 @@ class TestVisibility:
 # REQ-062 / REQ-072: output guard on the live path (C4, C5)
 # ---------------------------------------------------------------------------
 
+
 class TestGuardOnLivePath:
     def test_negative_instruction_leak_replaced_by_refusal(self, tmp_path):
         up = Upstream(lambda r: httpx.Response(200, content=sse_body("My rules: ", SYSTEM_PROMPT[100:400])))
@@ -210,6 +227,7 @@ class TestGuardOnLivePath:
 # REQ-076: model failures become one error event with code, message, request id
 # ---------------------------------------------------------------------------
 
+
 class SlowStream(httpx.AsyncByteStream):
     def __init__(self, pieces, fail_after=None, delay=0.0):
         self.pieces, self.fail_after, self.delay, self.closed = pieces, fail_after, delay, False
@@ -226,11 +244,15 @@ class SlowStream(httpx.AsyncByteStream):
 
 
 class TestModelFailures:
-    @pytest.mark.parametrize("respond, code", [
-        (lambda r: (_ for _ in ()).throw(httpx.ConnectError("refused")), "model_unavailable"),
-        (lambda r: (_ for _ in ()).throw(httpx.ReadTimeout("slow")), "model_timeout"),
-        (lambda r: httpx.Response(500, text="boom"), "model_http_error"),
-    ], ids=["unavailable", "timeout", "http-500"])
+    @pytest.mark.parametrize(
+        "respond, code",
+        [
+            (lambda r: (_ for _ in ()).throw(httpx.ConnectError("refused")), "model_unavailable"),
+            (lambda r: (_ for _ in ()).throw(httpx.ReadTimeout("slow")), "model_timeout"),
+            (lambda r: httpx.Response(500, text="boom"), "model_http_error"),
+        ],
+        ids=["unavailable", "timeout", "http-500"],
+    )
     def test_negative_failure_before_any_text(self, tmp_path, respond, code):
         _, events = ask(tmp_path, {"leave.md": LEAVE}, "annual leave", Upstream(respond))
         assert names(events)[-1] == "error" and names(events).count("error") == 1 and "done" not in names(events)
@@ -239,7 +261,8 @@ class TestModelFailures:
         assert err["request_id"] == dict(events)["meta"]["request_id"]
 
     def test_negative_failure_after_stream_started_is_marked_partial(self, tmp_path):
-        first = f'data: {json.dumps({"choices": [{"delta": {"content": "Employees receive twenty-five days of leave. "}}]})}\n\n'.encode()
+        delta = {"choices": [{"delta": {"content": "Employees receive twenty-five days of leave. "}}]}
+        first = f"data: {json.dumps(delta)}\n\n".encode()
         up = Upstream(lambda r: httpx.Response(200, stream=SlowStream([first, b"x"], fail_after=1)))
         _, events = ask(tmp_path, {"leave.md": LEAVE}, "annual leave", up)
         err = dict(events)["error"]
@@ -256,11 +279,19 @@ class TestModelFailures:
 # Request validation (before any stream starts)
 # ---------------------------------------------------------------------------
 
+
 class TestValidation:
-    @pytest.mark.parametrize("payload, status", [
-        ({}, 422), ({"question": ""}, 422), ({"question": 42}, 422),
-        ({"question": "x" * (MAX_QUESTION_CHARS + 1)}, 422), ({"question": "   \n\t "}, 400),
-    ], ids=["missing", "empty", "not-string", "too-long", "blank"])
+    @pytest.mark.parametrize(
+        "payload, status",
+        [
+            ({}, 422),
+            ({"question": ""}, 422),
+            ({"question": 42}, 422),
+            ({"question": "x" * (MAX_QUESTION_CHARS + 1)}, 422),
+            ({"question": "   \n\t "}, 400),
+        ],
+        ids=["missing", "empty", "not-string", "too-long", "blank"],
+    )
     def test_negative_invalid_requests_rejected_before_streaming(self, tmp_path, payload, status):
         up = Upstream(lambda r: httpx.Response(200, content=sse_body("x")))
         app = create_app(settings_for(tmp_path), transport=httpx.MockTransport(up))
@@ -271,8 +302,15 @@ class TestValidation:
     def test_negative_question_too_long_for_context_is_error_event(self, tmp_path):
         up = Upstream(lambda r: httpx.Response(200, content=sse_body("x")))
         question = "annual leave " + "why " * 1900  # within MAX_QUESTION_CHARS, over the context
-        _, events = ask(tmp_path, {"leave.md": LEAVE}, question, up, LLM_CONTEXT_TOKENS="2400", LLM_MAX_TOKENS="300",
-                        CONTEXT_TOKEN_BUDGET="1500")
+        _, events = ask(
+            tmp_path,
+            {"leave.md": LEAVE},
+            question,
+            up,
+            LLM_CONTEXT_TOKENS="2400",
+            LLM_MAX_TOKENS="300",
+            CONTEXT_TOKEN_BUDGET="1500",
+        )
         assert dict(events)["error"]["code"] == "question_too_long" and up.requests == []
 
     def test_edge_question_whitespace_trimmed(self, tmp_path):
@@ -285,17 +323,25 @@ class TestValidation:
 # REQ-033: a client disconnect closes the model call
 # ---------------------------------------------------------------------------
 
+
 def test_edge_closing_the_event_stream_closes_the_model_call(tmp_path):
     (tmp_path / "leave.md").write_text(LEAVE, encoding="utf-8")
-    pieces = [f'data: {json.dumps({"choices": [{"delta": {"content": f"word{i} "}}]})}\n\n'.encode() for i in range(200)]
+    pieces = [
+        f"data: {json.dumps({'choices': [{'delta': {'content': f'word{i} '}}]})}\n\n".encode() for i in range(200)
+    ]
     stream = SlowStream(pieces, delay=0.01)
     settings = settings_for(tmp_path)
 
     async def main():
         transport = httpx.MockTransport(lambda r: httpx.Response(200, stream=stream))
         async with httpx.AsyncClient(transport=transport) as client:
-            deps = ChatDeps(settings, Corpus(str(tmp_path), 10**6, 500, 0.0), IndexCache(800), client,
-                            build_tracer_provider(None).get_tracer("test"))
+            deps = ChatDeps(
+                settings,
+                Corpus(str(tmp_path), 10**6, 500, 0.0),
+                IndexCache(800),
+                client,
+                build_tracer_provider(None).get_tracer("test"),
+            )
             gen = answer("annual leave", deps)
             async for event in gen:
                 if event["event"] == "token":

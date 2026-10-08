@@ -32,11 +32,16 @@ def test_negative_no_execution_mechanisms_in_app(path):
     assert found == [], f"{path.name} uses {found}"
 
 
-@pytest.mark.parametrize("snippet, expected", [
-    ("eval(x)", "eval/exec"), ("subprocess.run(cmd)", "shell/subprocess"),
-    ("Template(text)", "template engine"), ('"tools": []', "tool/function calling"),
-    ("{}.format(doc)", "str.format on variables"),
-])
+@pytest.mark.parametrize(
+    "snippet, expected",
+    [
+        ("eval(x)", "eval/exec"),
+        ("subprocess.run(cmd)", "shell/subprocess"),
+        ("Template(text)", "template engine"),
+        ('"tools": []', "tool/function calling"),
+        ("{}.format(doc)", "str.format on variables"),
+    ],
+)
 def test_positive_detector_catches_each_mechanism(snippet, expected):
     # Guards against a broken pattern silently passing every file.
     assert FORBIDDEN[expected].search(snippet)

@@ -213,7 +213,26 @@ Run a single requirement's tests, for example:
 uv run pytest -v tests/test_config.py::TestReq016FailFast
 ```
 
-Current result: **522 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Dev-only dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
+Current result: **525 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Test-only dev dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The other dev tools are listed below. The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
+
+## Code quality and security checks (REQ-120..123)
+
+Dev tools (in the `dev` group of `pyproject.toml`, pinned in `uv.lock`): `ruff` (lint and format), `mypy` (types), `bandit` (static security analysis), `pip-audit` (dependency vulnerabilities) and `pre-commit`. Settings are in `pyproject.toml`.
+
+Pre-commit hooks run ruff lint, ruff format check, mypy and bandit on every commit. They are local hooks that run through `uv`, so they use the same tool versions as `uv.lock` and download nothing:
+
+```bash
+uv run pre-commit install          # once per clone: adds the git hook
+uv run pre-commit run --all-files  # run the hooks by hand
+```
+
+The full verification run adds the tests, gitleaks (secrets), pip-audit and Trivy (container image), and saves every tool's output plus `summary.md` under `docs/evidence/verify/`:
+
+```bash
+scripts/verify.sh               # everything except container tests
+scripts/verify.sh --container   # also build the image and run container tests
+scripts/verify.sh --offline     # skip checks that need internet (pip-audit, Trivy DB)
+```
 
 ## Configuration
 

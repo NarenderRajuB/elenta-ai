@@ -42,6 +42,7 @@ EXPENSES = "Expense claims must be submitted within 30 days with receipts. Trave
 # REQ-051: stable chunk identifiers that name the source
 # ---------------------------------------------------------------------------
 
+
 class TestReq051ChunkIds:
     def test_positive_id_contains_path_ordinal_and_content_hash(self):
         [chunk] = chunk_document(doc("policies/leave.md", "Some text."), 800)
@@ -70,6 +71,7 @@ class TestReq051ChunkIds:
 # ---------------------------------------------------------------------------
 # REQ-050: deliberate evidence selection (chunking + BM25)
 # ---------------------------------------------------------------------------
+
 
 class TestReq050Chunking:
     def test_positive_short_paragraphs_packed_together(self):
@@ -148,6 +150,7 @@ class TestReq050Ranking:
 # REQ-044 (index side): deleted or changed documents leave nothing in the index
 # ---------------------------------------------------------------------------
 
+
 class TestIndexFreshness:
     def test_positive_index_reuses_unchanged_version(self, tmp_path):
         corpus = corpus_with(tmp_path, {"a.txt": "alpha"})
@@ -185,6 +188,7 @@ class TestIndexFreshness:
 # REQ-053 / REQ-075: insufficient evidence is detected before the model is asked
 # ---------------------------------------------------------------------------
 
+
 class TestReq053Insufficient:
     def test_positive_sufficient_when_relevant_chunk_exists(self, tmp_path):
         sel = select(index_for(tmp_path, {"leave.md": LEAVE}), "annual leave", 1500, 0.0)
@@ -215,6 +219,7 @@ class TestReq053Insufficient:
 # ---------------------------------------------------------------------------
 # REQ-055 / REQ-071: explicit token budget; nothing overflows silently
 # ---------------------------------------------------------------------------
+
 
 class TestReq055Budget:
     @staticmethod
@@ -252,11 +257,14 @@ class TestReq055Budget:
         # a and b match both words (b is slightly longer, so ranks just below a);
         # c matches one word and is tiny. Budget 170 fits a (153) but not a+b (311),
         # so b is dropped and c (3) still fits in the remaining space.
-        idx = index_for(tmp_path, {
-            "a.txt": "zebra apple " + "x " * 300,
-            "b.txt": "zebra apple " + "y " * 310,
-            "c.txt": "apple tiny",
-        })
+        idx = index_for(
+            tmp_path,
+            {
+                "a.txt": "zebra apple " + "x " * 300,
+                "b.txt": "zebra apple " + "y " * 310,
+                "c.txt": "apple tiny",
+            },
+        )
         sel = select(idx, "zebra apple", 170, 0.0)
         assert [c.rel_path for c in sel.chunks] == ["a.txt", "c.txt"]
         assert [d.chunk_id.split("#")[0] for d in sel.dropped_top] == ["b.txt"]
@@ -277,6 +285,7 @@ class TestReq055Budget:
 # ---------------------------------------------------------------------------
 # REQ-083 (estimation side): token counts are estimates with a documented method
 # ---------------------------------------------------------------------------
+
 
 class TestTokenEstimate:
     @pytest.mark.parametrize("text, expected", [("", 0), ("a", 1), ("abcd", 1), ("abcde", 2), ("x" * 400, 100)])

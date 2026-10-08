@@ -48,6 +48,7 @@ def reasons(snapshot) -> dict[str, str]:
 # REQ-041: UTF-8 .txt and .md supported; every format and limit stated
 # ---------------------------------------------------------------------------
 
+
 class TestReq041Formats:
     def test_positive_txt_and_md_are_served(self, tmp_path):
         write(tmp_path, "a.txt", "alpha")
@@ -87,6 +88,7 @@ class TestReq041Formats:
 # Limits: per-file size (50 MB default) and file count (500 default)
 # ---------------------------------------------------------------------------
 
+
 class TestLimits:
     def test_positive_file_exactly_at_size_limit_served(self, tmp_path):
         write(tmp_path, "edge.txt", "x" * 100)
@@ -124,6 +126,7 @@ class TestLimits:
 
     def test_edge_default_limits_from_config(self):
         from app.config import DEFAULT_CORPUS_MAX_FILE_BYTES, DEFAULT_CORPUS_MAX_FILES
+
         assert DEFAULT_CORPUS_MAX_FILE_BYTES == 50 * MB
         assert DEFAULT_CORPUS_MAX_FILES == 500
 
@@ -131,6 +134,7 @@ class TestLimits:
 # ---------------------------------------------------------------------------
 # REQ-042 / REQ-003: add, modify, rename, remove reflected without restart
 # ---------------------------------------------------------------------------
+
 
 class TestReq042LiveChanges:
     def test_positive_added_file_appears_on_next_refresh(self, tmp_path):
@@ -207,6 +211,7 @@ class TestReq042LiveChanges:
 # REQ-044: removed documents stop contributing; nothing stale survives deletion
 # ---------------------------------------------------------------------------
 
+
 class TestReq044Deletion:
     def test_positive_deleted_file_is_gone(self, tmp_path):
         corpus = make_corpus(tmp_path)
@@ -258,6 +263,7 @@ class TestReq044Deletion:
 # ---------------------------------------------------------------------------
 # REQ-045: rapid changes and partially written files never served mixed
 # ---------------------------------------------------------------------------
+
 
 class TestReq045PartialWrites:
     def test_positive_file_served_once_settled(self, tmp_path):
@@ -332,7 +338,7 @@ class TestReq045PartialWrites:
                 for _ in range(5):
                     snap = corpus.refresh()
                     assert len(snap.documents) == 30
-            except Exception as exc:  # noqa: BLE001 - surfaced via the errors list
+            except Exception as exc:
                 errors.append(exc)
 
         threads = [threading.Thread(target=worker) for _ in range(4)]
@@ -346,6 +352,7 @@ class TestReq045PartialWrites:
 # ---------------------------------------------------------------------------
 # REQ-056 / REQ-073: unreadable, unsupported or corrupt files do not take down the service
 # ---------------------------------------------------------------------------
+
 
 class TestReq056CorruptFiles:
     @pytest.mark.parametrize(
@@ -414,6 +421,7 @@ class TestReq056CorruptFiles:
 # ---------------------------------------------------------------------------
 # REQ-064: reads restricted to the corpus root; symlinks, hidden, special files
 # ---------------------------------------------------------------------------
+
 
 class TestReq064Boundary:
     def test_positive_only_files_under_root_are_read(self, tmp_path):

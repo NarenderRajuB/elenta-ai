@@ -79,8 +79,10 @@ class Corpus:
             candidates, skips = ingestion.scan(self._root)
 
             # Deterministic cut-off: the first max_files paths in sorted order are served.
-            for extra in candidates[self._max_files:]:
-                skips.append(Skip(extra.rel_path, "file_limit_exceeded", ingestion.SKIP_SEVERITY["file_limit_exceeded"]))
+            for extra in candidates[self._max_files :]:
+                skips.append(
+                    Skip(extra.rel_path, "file_limit_exceeded", ingestion.SKIP_SEVERITY["file_limit_exceeded"])
+                )
             candidates = candidates[: self._max_files]
 
             documents: list[Document] = []
@@ -131,8 +133,14 @@ class Corpus:
         log.info(
             "corpus refreshed: version=%d documents=%d added=%d modified=%d removed=%d "
             "unchanged=%d skipped=%d duration_ms=%.1f",
-            snapshot.version, len(snapshot.documents), s.added, s.modified, s.removed,
-            s.unchanged, s.skipped, s.duration_ms,
+            snapshot.version,
+            len(snapshot.documents),
+            s.added,
+            s.modified,
+            s.removed,
+            s.unchanged,
+            s.skipped,
+            s.duration_ms,
         )
         for skip in snapshot.skips:
             level = logging.WARNING if skip.severity == "error" else logging.DEBUG

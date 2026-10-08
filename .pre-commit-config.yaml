@@ -1,0 +1,38 @@
+# Fast code quality and security checks on every commit (REQ-121, REQ-122).
+#
+# Hooks are "local" and run through uv, so tool versions come from uv.lock (the same
+# versions scripts/verify.sh uses) and pre-commit downloads nothing.
+# Slower checks (tests, gitleaks, pip-audit, Trivy) stay in scripts/verify.sh.
+#
+# Setup:  uv run pre-commit install
+# Manual: uv run pre-commit run --all-files
+
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-lint
+        name: ruff lint
+        entry: uv run ruff check
+        language: system
+        types: [python]
+
+      - id: ruff-format
+        name: ruff format check
+        entry: uv run ruff format --check
+        language: system
+        types: [python]
+
+      - id: mypy
+        name: mypy
+        # Uses the file list in [tool.mypy] so the whole project is type-checked together.
+        entry: uv run mypy
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: bandit
+        name: bandit
+        entry: uv run bandit -c pyproject.toml -q
+        language: system
+        types: [python]
+        exclude: ^tests/

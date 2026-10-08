@@ -1,0 +1,4 @@
+$ uv run ruff format --check .
+# 2026-10-08T22:21:30Z
+
+42 files already formatted

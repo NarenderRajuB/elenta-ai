@@ -42,6 +42,7 @@ def _exit_of(env: dict[str, str]) -> tuple[int, str]:
 
 # --- Negative: bad configuration aborts startup ----------------------------------
 
+
 def test_negative_missing_config_exits_with_code_2_and_clear_message():
     code, stderr = _exit_of({})
     assert code == 2
@@ -73,10 +74,15 @@ def test_negative_corpus_dir_that_is_a_file_aborts(tmp_path):
 def test_negative_budget_that_cannot_fit_context_aborts(tmp_path):
     # Each value is individually valid, but instructions + 3000 evidence + 100 question
     # cannot fit in 4096 - 1000: startup must refuse rather than overflow per request.
-    code, stderr = _exit_of({
-        "LLM_URL": "http://127.0.0.1:1/v1", "LLM_MODEL": "m", "CORPUS_DIR": str(tmp_path),
-        "CONTEXT_TOKEN_BUDGET": "3000", "LLM_MAX_TOKENS": "1000",
-    })
+    code, stderr = _exit_of(
+        {
+            "LLM_URL": "http://127.0.0.1:1/v1",
+            "LLM_MODEL": "m",
+            "CORPUS_DIR": str(tmp_path),
+            "CONTEXT_TOKEN_BUDGET": "3000",
+            "LLM_MAX_TOKENS": "1000",
+        }
+    )
     assert code == 2
     assert "Context budget does not fit" in stderr and "Traceback" not in stderr
 
@@ -88,17 +94,20 @@ def test_edge_secret_in_bad_url_not_printed():
 
 # --- Positive: valid config starts a server with working health signals -----------
 
+
 def test_positive_server_starts_live_and_reports_model_unreachable(tmp_path):
     app_port, dead_llm_port = _free_port(), _free_port()
     (tmp_path / "doc.txt").write_text("hello", encoding="utf-8")
-    proc = _run_app({
-        "CORPUS_DIR": str(tmp_path),
-        "CORPUS_SETTLE_SECONDS": "0",
-        "LLM_URL": f"http://127.0.0.1:{dead_llm_port}/v1",
-        "LLM_MODEL": "qwen2.5:0.5b",
-        "APP_PORT": str(app_port),
-        "LLM_HEALTH_TIMEOUT_SECONDS": "1",
-    })
+    proc = _run_app(
+        {
+            "CORPUS_DIR": str(tmp_path),
+            "CORPUS_SETTLE_SECONDS": "0",
+            "LLM_URL": f"http://127.0.0.1:{dead_llm_port}/v1",
+            "LLM_MODEL": "qwen2.5:0.5b",
+            "APP_PORT": str(app_port),
+            "LLM_HEALTH_TIMEOUT_SECONDS": "1",
+        }
+    )
     try:
         base = f"http://127.0.0.1:{app_port}"
         deadline = time.monotonic() + 15

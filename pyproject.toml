@@ -16,8 +16,13 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "bandit>=1.9.4",
     "httpx2>=2.13.1",
+    "mypy>=2.4.0",
+    "pip-audit>=2.10.1",
+    "pre-commit>=4.6.2",
     "pytest>=9.1.1",
+    "ruff>=0.16.10",
 ]
 
 [tool.pytest.ini_options]
@@ -28,3 +33,28 @@ pythonpath = ["."]
 # Excluded by default; run them with: uv run pytest -m container
 markers = ["container: builds and runs the Docker image (slow; needs Docker)"]
 addopts = "-m 'not container'"
+
+# --- Code quality and security checks (REQ-121, REQ-122) ---------------------------
+# Rule sets are listed explicitly so results don't change when a tool's defaults change.
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+# E/W pycodestyle, F pyflakes, I import order, B bugbear, UP pyupgrade, C4 comprehensions,
+# PERF performance, RUF ruff-specific. Security rules are left to bandit.
+select = ["E", "W", "F", "I", "B", "UP", "C4", "PERF", "RUF"]
+# The look-alike brackets are deliberate: prompt assembly replaces <<< and >>> in
+# untrusted text with them so evidence can't forge block markers (ADR-006 C2).
+allowed-confusables = ["‹", "›"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["app", "scripts"]
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]

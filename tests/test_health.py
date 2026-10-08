@@ -27,10 +27,12 @@ def _readyz(handler, settings: Settings = SETTINGS) -> httpx.Response:
 def _raise(exc: Exception):
     def handler(request: httpx.Request) -> httpx.Response:
         raise exc
+
     return handler
 
 
 # --- Positive ----------------------------------------------------------------
+
 
 def test_positive_healthz_ok():
     with _client(lambda r: httpx.Response(200, json=MODELS_OK)) as client:
@@ -58,6 +60,7 @@ def test_positive_probe_uses_standard_models_path():
 
 # --- Negative: each failure maps to 503 with a fixed reason code ---------------
 
+
 @pytest.mark.parametrize(
     "handler, reason",
     [
@@ -72,8 +75,18 @@ def test_positive_probe_uses_standard_models_path():
         (lambda r: httpx.Response(200, json={"data": "nope"}), "invalid_response"),
         (lambda r: httpx.Response(200, json={"data": [{"id": "other:1b"}]}), "model_not_found"),
     ],
-    ids=["refused", "read-timeout", "connect-timeout", "500", "404", "not-json",
-         "no-data-key", "items-without-id", "data-not-list", "model-missing"],
+    ids=[
+        "refused",
+        "read-timeout",
+        "connect-timeout",
+        "500",
+        "404",
+        "not-json",
+        "no-data-key",
+        "items-without-id",
+        "data-not-list",
+        "model-missing",
+    ],
 )
 def test_negative_not_ready(handler, reason):
     response = _readyz(handler)
@@ -83,6 +96,7 @@ def test_negative_not_ready(handler, reason):
 
 # --- Edge cases ----------------------------------------------------------------
 
+
 def test_edge_liveness_stays_ok_when_model_is_down():
     # A model outage must not make liveness fail (it would trigger needless restarts).
     with _client(_raise(httpx.ConnectError("refused"))) as client:
@@ -91,7 +105,9 @@ def test_edge_liveness_stays_ok_when_model_is_down():
 
 
 def test_edge_empty_model_list_is_model_not_found():
-    assert _readyz(lambda r: httpx.Response(200, json={"data": []})).json()["checks"]["llm"]["reason"] == "model_not_found"
+    assert (
+        _readyz(lambda r: httpx.Response(200, json={"data": []})).json()["checks"]["llm"]["reason"] == "model_not_found"
+    )
 
 
 def test_edge_model_match_is_exact():

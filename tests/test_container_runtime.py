@@ -113,6 +113,7 @@ def _host_ollama_has_model() -> bool:
 
 # --- Positive --------------------------------------------------------------------
 
+
 def test_positive_container_becomes_healthy(running):
     name = running()
     end = time.monotonic() + 40
@@ -154,7 +155,8 @@ REFRESH_LOOP = (
     "c = Corpus('/data', 50 * 1024 * 1024, 500, 0.0)\n"
     "for line in sys.stdin:\n"
     "    s = c.refresh()\n"
-    "    print(json.dumps({d.rel_path: d.text for d in s.documents if d.rel_path.startswith(line.strip())}), flush=True)\n"
+    "    docs = {d.rel_path: d.text for d in s.documents if d.rel_path.startswith(line.strip())}\n"
+    "    print(json.dumps(docs), flush=True)\n"
 )
 
 
@@ -162,11 +164,16 @@ def test_positive_live_changes_visible_through_bind_mount(running):
     # REQ-042/044/046: host edits reach the container through the bind mount with the
     # metadata the change detection relies on (size, mtime, ctime, inode).
     import json
+
     name = running()
     prefix = f"_pytest_live_{uuid.uuid4().hex[:6]}"
     path = ROOT / "data" / f"{prefix}.txt"
-    proc = subprocess.Popen(["docker", "exec", "-i", name, "python", "-u", "-c", REFRESH_LOOP],
-                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    proc = subprocess.Popen(
+        ["docker", "exec", "-i", name, "python", "-u", "-c", REFRESH_LOOP],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
 
     def refresh() -> dict:
         proc.stdin.write(prefix + "\n")
@@ -204,6 +211,7 @@ def test_positive_startup_log_reports_corpus(running):
 
 # --- Negative --------------------------------------------------------------------
 
+
 def test_negative_missing_config_exits_2_with_clear_message():
     result = _compose("run", "--rm", "--no-deps", "-e", "LLM_URL=", "-e", "LLM_MODEL=", "app")
     assert result.returncode == 2
@@ -237,6 +245,7 @@ def test_negative_model_unreachable_reports_not_ready(running):
 
 # --- Edge ------------------------------------------------------------------------
 
+
 def test_edge_tmp_is_writable(running):
     assert _exec(running(), "sh", "-c", "touch /tmp/ok && echo ok").stdout.strip() == "ok"
 
@@ -258,9 +267,21 @@ def test_edge_starts_with_no_network_at_all():
     env_args = [arg for k, v in VALID_ENV.items() for arg in ("-e", f"{k}={v}")]
     # Same read-only /data mount as compose.yaml: without it the app refuses to start
     # (CORPUS_DIR must exist), which is covered by its own test.
-    result = _docker("run", "-d", "--name", name, "--network", "none", "--read-only",
-                     "-v", f"{ROOT / 'data'}:/data:ro",
-                     *env_args, "-e", "APP_HOST=127.0.0.1", "elenta-ai:local")
+    result = _docker(
+        "run",
+        "-d",
+        "--name",
+        name,
+        "--network",
+        "none",
+        "--read-only",
+        "-v",
+        f"{ROOT / 'data'}:/data:ro",
+        *env_args,
+        "-e",
+        "APP_HOST=127.0.0.1",
+        "elenta-ai:local",
+    )
     assert result.returncode == 0, result.stderr
     try:
         _wait_live(name)

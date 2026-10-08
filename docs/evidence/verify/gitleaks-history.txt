@@ -1,0 +1,6 @@
+$ docker run --rm -v /Users/nbongoni/ai-asmt/elenta-ai:/repo:ro zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f git /repo --log-opts=--all --redact --no-banner --no-color
+# 2026-10-08T22:21:32Z
+
+10:21PM INF 15 commits scanned.
+10:21PM INF scanned ~583641 bytes (583.64 KB) in 660ms
+10:21PM INF no leaks found

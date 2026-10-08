@@ -51,12 +51,13 @@ class FakeModel:
                     for i in range(TOKENS):
                         await anyio.sleep(DELAY)
                         self.produced += 1
-                        yield f'data: {json.dumps({"choices": [{"delta": {"content": f"word{i} "}}]})}\n\n'
+                        yield f"data: {json.dumps({'choices': [{'delta': {'content': f'word{i} '}}]})}\n\n"
                     yield "data: [DONE]\n\n"
                     self.finished = True
                 finally:
                     if not self.finished:
                         self.cancelled.set()
+
             return StreamingResponse(gen(), media_type="text/event-stream")
 
         self.app = app
@@ -86,8 +87,14 @@ def stack(tmp_path):
     (tmp_path / "leave.md").write_text("Employees receive 25 days of annual leave.", encoding="utf-8")
     model = FakeModel()
     with Server(model.app) as upstream:
-        settings = load_settings({"LLM_URL": f"http://127.0.0.1:{upstream.port}/v1", "LLM_MODEL": "gemma3:1b",
-                                  "CORPUS_DIR": str(tmp_path), "CORPUS_SETTLE_SECONDS": "0"})
+        settings = load_settings(
+            {
+                "LLM_URL": f"http://127.0.0.1:{upstream.port}/v1",
+                "LLM_MODEL": "gemma3:1b",
+                "CORPUS_DIR": str(tmp_path),
+                "CORPUS_SETTLE_SECONDS": "0",
+            }
+        )
         with Server(create_app(settings)) as app:
             yield model, f"http://127.0.0.1:{app.port}"
 
@@ -108,7 +115,7 @@ def test_positive_answer_arrives_progressively(stack):
     start = time.monotonic()
     token_times, final = [], None
     with httpx.stream("POST", f"{base}/chat", json={"question": "annual leave"}, timeout=30, trust_env=False) as r:
-        for name, data, at in _events(r):
+        for name, _data, at in _events(r):
             if name == "token":
                 token_times.append(at - start)
             elif name in ("done", "error"):

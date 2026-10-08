@@ -35,7 +35,9 @@ def main() -> int:
     # is absent), so it fails fast. If it disappears later, refresh reports it and the
     # service keeps running with an empty corpus.
     if not os.path.isdir(settings.corpus_dir):
-        print(f"elenta: startup aborted.\nCORPUS_DIR is not an existing directory: {settings.corpus_dir}", file=sys.stderr)
+        print(
+            f"elenta: startup aborted.\nCORPUS_DIR is not an existing directory: {settings.corpus_dir}", file=sys.stderr
+        )
         return EXIT_CONFIG_ERROR
 
     # The worst case must fit the model's context: instructions + a full evidence budget

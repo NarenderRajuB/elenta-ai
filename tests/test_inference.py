@@ -25,8 +25,16 @@ def delta(text: str, finish: str | None = None) -> dict:
 
 
 async def collect(handler, **overrides) -> list:
-    options = dict(url=URL, model="gemma3:1b", messages=[{"role": "user", "content": "q"}], max_tokens=64,
-                   temperature=0.0, connect_timeout=1, read_timeout=1, request_timeout=5)
+    options = {
+        "url": URL,
+        "model": "gemma3:1b",
+        "messages": [{"role": "user", "content": "q"}],
+        "max_tokens": 64,
+        "temperature": 0.0,
+        "connect_timeout": 1,
+        "read_timeout": 1,
+        "request_timeout": 5,
+    }
     options.update(overrides)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         return [item async for item in stream_chat(client, **options)]
@@ -55,9 +63,13 @@ class SlowStream(httpx.AsyncByteStream):
 
 # --- Positive ----------------------------------------------------------------------
 
+
 def test_positive_deltas_usage_and_finish_in_order():
-    body = sse(delta("Leave "), delta("is 25 days", "stop"),
-               {"choices": [], "usage": {"prompt_tokens": 300, "completion_tokens": 5}})
+    body = sse(
+        delta("Leave "),
+        delta("is 25 days", "stop"),
+        {"choices": [], "usage": {"prompt_tokens": 300, "completion_tokens": 5}},
+    )
     items = run(lambda r: httpx.Response(200, content=body))
     assert items == [TextDelta("Leave "), TextDelta("is 25 days"), Usage(300, 5), Finish("stop")]
 
@@ -79,19 +91,26 @@ def test_positive_request_uses_only_standard_fields():
 
 def test_positive_many_small_deltas_are_yielded_individually():
     body = sse(*[delta(c) for c in "streaming"])
-    assert [i.text for i in run(lambda r: httpx.Response(200, content=body)) if isinstance(i, TextDelta)] == list("streaming")
+    assert [i.text for i in run(lambda r: httpx.Response(200, content=body)) if isinstance(i, TextDelta)] == list(
+        "streaming"
+    )
 
 
 # --- Negative: each failure has its own code ---------------------------------------
 
-@pytest.mark.parametrize("exc, code", [
-    (httpx.ConnectError("refused"), "model_unavailable"),
-    (httpx.ConnectTimeout("slow"), "model_timeout"),
-    (httpx.ReadTimeout("slow"), "model_timeout"),
-])
+
+@pytest.mark.parametrize(
+    "exc, code",
+    [
+        (httpx.ConnectError("refused"), "model_unavailable"),
+        (httpx.ConnectTimeout("slow"), "model_timeout"),
+        (httpx.ReadTimeout("slow"), "model_timeout"),
+    ],
+)
 def test_negative_transport_failures_before_stream(exc, code):
     def handler(request):
         raise exc
+
     with pytest.raises(InferenceError) as err:
         run(handler)
     assert err.value.code == code and err.value.started is False
@@ -121,6 +140,7 @@ def test_negative_stalled_stream_hits_read_timeout():
     # A gap longer than read_timeout between pieces is a timeout, not an endless wait.
     def handler(request):
         raise httpx.ReadTimeout("no data")
+
     with pytest.raises(InferenceError) as err:
         run(handler, read_timeout=0.1)
     assert err.value.code == "model_timeout"
@@ -136,6 +156,7 @@ def test_negative_whole_request_deadline():
 
 # --- Edge --------------------------------------------------------------------------
 
+
 def test_edge_no_usage_reported_is_fine():
     items = run(lambda r: httpx.Response(200, content=sse(delta("ok", "stop"))))
     assert not any(isinstance(i, Usage) for i in items) and items[-1] == Finish("stop")
@@ -147,8 +168,12 @@ def test_edge_missing_done_marker_still_finishes():
 
 
 def test_edge_comments_blank_lines_and_empty_deltas_ignored():
-    body = b": keep-alive\n\nevent: ping\n\n" + sse({"choices": [{"delta": {}}]}, {"choices": [{"delta": {"role": "assistant"}}]}, delta("hi"))
-    assert [i for i in run(lambda r: httpx.Response(200, content=body)) if isinstance(i, TextDelta)] == [TextDelta("hi")]
+    body = b": keep-alive\n\nevent: ping\n\n" + sse(
+        {"choices": [{"delta": {}}]}, {"choices": [{"delta": {"role": "assistant"}}]}, delta("hi")
+    )
+    assert [i for i in run(lambda r: httpx.Response(200, content=body)) if isinstance(i, TextDelta)] == [
+        TextDelta("hi")
+    ]
 
 
 def test_edge_length_finish_reason_reported():
@@ -161,9 +186,20 @@ def test_edge_consumer_stopping_early_closes_upstream():
     stream = SlowStream([f"data: {json.dumps(delta(str(i)))}\n\n".encode() for i in range(50)], delay=0.01)
 
     async def main():
-        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, stream=stream))) as client:
-            gen = stream_chat(client, url=URL, model="m", messages=[], max_tokens=1, temperature=0,
-                              connect_timeout=1, read_timeout=1, request_timeout=5)
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda r: httpx.Response(200, stream=stream))
+        ) as client:
+            gen = stream_chat(
+                client,
+                url=URL,
+                model="m",
+                messages=[],
+                max_tokens=1,
+                temperature=0,
+                connect_timeout=1,
+                read_timeout=1,
+                request_timeout=5,
+            )
             async for _ in gen:
                 break
             await gen.aclose()

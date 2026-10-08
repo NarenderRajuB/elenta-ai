@@ -32,6 +32,7 @@ def client(tmp_path):
 
 # --- Positive ----------------------------------------------------------------------
 
+
 def test_positive_index_page_served(client):
     response = client.get("/")
     assert response.status_code == 200 and response.headers["content-type"].startswith("text/html")
@@ -57,7 +58,20 @@ def test_positive_untrusted_text_written_with_text_apis():
 
 # --- Negative ----------------------------------------------------------------------
 
-@pytest.mark.parametrize("sink", ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "setTimeout(\"", "DOMParser"])
+
+@pytest.mark.parametrize(
+    "sink",
+    [
+        "innerHTML",
+        "outerHTML",
+        "insertAdjacentHTML",
+        "document.write",
+        "eval(",
+        "new Function",
+        'setTimeout("',
+        "DOMParser",
+    ],
+)
 def test_negative_no_html_sinks_or_code_evaluation(sink):
     assert sink not in APP_JS_CODE
 
@@ -89,6 +103,7 @@ def test_negative_api_docs_disabled(client):
 
 
 # --- Edge --------------------------------------------------------------------------
+
 
 def test_edge_path_traversal_under_static_refused(client):
     assert client.get("/static/../config.py").status_code == 404

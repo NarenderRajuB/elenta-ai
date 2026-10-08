@@ -49,12 +49,12 @@ class GuardEvents:
 class OutputGuard:
     system_prompt: str
     events: GuardEvents = field(default_factory=GuardEvents)
-    _pending: str = ""          # received, not yet classified as answer or reasoning
-    _answer: str = ""           # classified as answer, not all released yet
-    _released: int = 0          # how many characters of _answer were released
+    _pending: str = ""  # received, not yet classified as answer or reasoning
+    _answer: str = ""  # classified as answer, not all released yet
+    _released: int = 0  # how many characters of _answer were released
     _in_reasoning: str | None = None  # closing marker we are waiting for
     _windows: frozenset = frozenset()
-    _checked: int = 0           # leak windows starting before this index were already checked
+    _checked: int = 0  # leak windows starting before this index were already checked
     _prompt_norm: str = ""
 
     def __post_init__(self) -> None:
@@ -89,22 +89,22 @@ class OutputGuard:
                 if hits:
                     pos, opener, closer = min(hits)
                     self._answer += self._pending[:pos]
-                    self._pending = self._pending[pos + len(opener):]
+                    self._pending = self._pending[pos + len(opener) :]
                     self._in_reasoning = closer
                     self.events.reasoning_removed += 1
                     continue
                 keep = 0 if final else self._partial_suffix(lower, [o for o, _ in REASONING_MARKERS])
                 self._answer += self._pending[: len(self._pending) - keep]
-                self._pending = self._pending[len(self._pending) - keep:]
+                self._pending = self._pending[len(self._pending) - keep :]
                 return
             pos = lower.find(self._in_reasoning)
             if pos != -1:
-                self._pending = self._pending[pos + len(self._in_reasoning):]
+                self._pending = self._pending[pos + len(self._in_reasoning) :]
                 self._in_reasoning = None
                 continue
             # Still inside reasoning: discard, keeping only a possible partial closer.
             keep = 0 if final else self._partial_suffix(lower, [self._in_reasoning])
-            self._pending = self._pending[len(self._pending) - keep:] if keep else ""
+            self._pending = self._pending[len(self._pending) - keep :] if keep else ""
             return
 
     @staticmethod
@@ -130,7 +130,7 @@ class OutputGuard:
                 return ""
         self._checked = max(self._checked, last_start + 1)
         upto = len(self._answer) if final else max(self._released, len(self._answer) - self._hold_back())
-        out = self._answer[self._released:upto]
+        out = self._answer[self._released : upto]
         self._released = upto
         return out
 
@@ -141,6 +141,6 @@ class OutputGuard:
             tail = _normalise(self._answer[-k:])
             # A tail starting with whitespace normalises to " ..."; compare it stripped
             # on the left too, so a leak beginning right after a space is still held.
-            if tail in self._prompt_norm or tail.lstrip() in self._prompt_norm and tail.strip():
+            if tail in self._prompt_norm or (tail.lstrip() in self._prompt_norm and tail.strip()):
                 return k
         return 0

@@ -20,7 +20,7 @@ from pathlib import Path
 import anyio
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from opentelemetry.sdk.trace.export import SpanExporter
 from pydantic import BaseModel, Field
@@ -90,8 +90,7 @@ def create_app(
 
     # No interactive API docs: they load scripts from a CDN, which breaks offline
     # operation (REQ-012) and the Content-Security-Policy.
-    app = FastAPI(title="ELENTA local chat service", lifespan=lifespan,
-                  docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="ELENTA local chat service", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -106,7 +105,7 @@ def create_app(
         return FileResponse(STATIC_DIR / "index.html")
 
     @app.post("/chat")
-    async def chat(body: ChatRequest) -> StreamingResponse:
+    async def chat(body: ChatRequest) -> Response:
         # Validation failures (empty, too long, wrong type) are answered as plain JSON
         # (422 by FastAPI, 400 below) before any stream starts; once the stream has
         # started, failures arrive as an `error` event (ADR-004).

@@ -21,7 +21,11 @@ pytestmark = pytest.mark.skipif(shutil.which("docker") is None, reason="docker C
 def _compose_config(**env_overrides: str) -> dict:
     result = subprocess.run(
         ["docker", "compose", "config", "--format", "json"],
-        cwd=ROOT, env={**os.environ, **env_overrides}, capture_output=True, text=True, timeout=60,
+        cwd=ROOT,
+        env={**os.environ, **env_overrides},
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)["services"]["app"]
@@ -33,6 +37,7 @@ def app_service() -> dict:
 
 
 # --- Positive --------------------------------------------------------------------
+
 
 def test_positive_corpus_mounted_read_only_at_data(app_service):
     mounts = [v for v in app_service["volumes"] if v["target"] == "/data"]
@@ -73,6 +78,7 @@ def test_positive_dockerfile_builds_from_lockfile_without_dev_tools():
 
 # --- Negative --------------------------------------------------------------------
 
+
 def test_negative_port_not_published_on_all_host_interfaces(app_service):
     # Must not be reachable from the LAN: every published port binds host loopback.
     assert app_service["ports"], "app port must be published"
@@ -100,6 +106,7 @@ def test_negative_base_image_is_pinned_by_digest():
 
 # --- Edge ------------------------------------------------------------------------
 
+
 def test_edge_compose_renders_without_env_file_values():
     # No .env values: Compose must still render (empty strings), so the app itself
     # reports the missing configuration with its clear error (REQ-016).
@@ -119,11 +126,17 @@ def test_edge_tmpfs_is_the_only_writable_path(app_service):
 
 # --- Trace viewer (ADR-008, REQ-085, REQ-012) ----------------------------------------
 
+
 @pytest.fixture(scope="module")
 def jaeger_service() -> dict:
-    result = subprocess.run(["docker", "compose", "config", "--format", "json"], cwd=ROOT,
-                            env={**os.environ, "LLM_URL": "http://h/v1", "LLM_MODEL": "m"},
-                            capture_output=True, text=True, timeout=60)
+    result = subprocess.run(
+        ["docker", "compose", "config", "--format", "json"],
+        cwd=ROOT,
+        env={**os.environ, "LLM_URL": "http://h/v1", "LLM_MODEL": "m"},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
     return json.loads(result.stdout)["services"]["jaeger"]
 
 

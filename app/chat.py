@@ -78,8 +78,10 @@ def _ms(start: float) -> float:
 
 
 def _error(request_id: str, code: str, partial: bool) -> dict:
-    return {"event": "error", "data": {"request_id": request_id, "code": code,
-                                       "message": ERROR_MESSAGES[code], "partial": partial}}
+    return {
+        "event": "error",
+        "data": {"request_id": request_id, "code": code, "message": ERROR_MESSAGES[code], "partial": partial},
+    }
 
 
 def _request_id(span: trace.Span) -> str:
@@ -123,10 +125,18 @@ async def answer(question: str, deps: ChatDeps) -> AsyncIterator[dict]:
         snapshot = await anyio.to_thread.run_sync(deps.corpus.refresh)
         timings["corpus_refresh_ms"] = _ms(t)
         st = snapshot.stats
-        span.set_attributes({"corpus.version": snapshot.version, "corpus.documents": len(snapshot.documents),
-                             "corpus.added": st.added, "corpus.modified": st.modified, "corpus.removed": st.removed,
-                             "corpus.unchanged": st.unchanged, "corpus.skipped": st.skipped,
-                             "corpus.skipped_errors": [f"{k.rel_path}:{k.reason}" for k in snapshot.skips if k.severity == "error"]})
+        span.set_attributes(
+            {
+                "corpus.version": snapshot.version,
+                "corpus.documents": len(snapshot.documents),
+                "corpus.added": st.added,
+                "corpus.modified": st.modified,
+                "corpus.removed": st.removed,
+                "corpus.unchanged": st.unchanged,
+                "corpus.skipped": st.skipped,
+                "corpus.skipped_errors": [f"{k.rel_path}:{k.reason}" for k in snapshot.skips if k.severity == "error"],
+            }
+        )
         end(span)
 
         span = stage("evidence.selection")
@@ -134,45 +144,78 @@ async def answer(question: str, deps: ChatDeps) -> AsyncIterator[dict]:
         index = await anyio.to_thread.run_sync(deps.index_cache.get, snapshot)
         selection = select(index, question, s.context_token_budget, s.selection_min_score)
         timings["selection_ms"] = _ms(t)
-        span.set_attributes({
-            "selection.index_chunks": len(index), "selection.query_terms": len(selection.query_terms),
-            "selection.candidates": selection.candidates_considered,
-            "selection.chunk_ids": [c.chunk_id for c in selection.chunks],
-            "selection.files": list(selection.source_files),
-            "selection.budget_tokens": selection.budget_tokens, "selection.used_tokens": selection.used_tokens,
-            "selection.dropped_chunks": selection.dropped_count, "selection.truncated": selection.truncated,
-            "selection.token_count_method": TOKEN_METHOD,
-            "selection.insufficient_reason": selection.insufficient_reason or "",
-        })
+        span.set_attributes(
+            {
+                "selection.index_chunks": len(index),
+                "selection.query_terms": len(selection.query_terms),
+                "selection.candidates": selection.candidates_considered,
+                "selection.chunk_ids": [c.chunk_id for c in selection.chunks],
+                "selection.files": list(selection.source_files),
+                "selection.budget_tokens": selection.budget_tokens,
+                "selection.used_tokens": selection.used_tokens,
+                "selection.dropped_chunks": selection.dropped_count,
+                "selection.truncated": selection.truncated,
+                "selection.token_count_method": TOKEN_METHOD,
+                "selection.insufficient_reason": selection.insufficient_reason or "",
+            }
+        )
         end(span)
-        log.info("evidence selected", extra={"chunk_ids": [c.chunk_id for c in selection.chunks],
-                                             "used_tokens": selection.used_tokens, "dropped_chunks": selection.dropped_count,
-                                             "insufficient_reason": selection.insufficient_reason})
+        log.info(
+            "evidence selected",
+            extra={
+                "chunk_ids": [c.chunk_id for c in selection.chunks],
+                "used_tokens": selection.used_tokens,
+                "dropped_chunks": selection.dropped_count,
+                "insufficient_reason": selection.insufficient_reason,
+            },
+        )
 
-        yield {"event": "sources", "data": {
-            "request_id": request_id,
-            "corpus_version": snapshot.version,
-            "documents": len(snapshot.documents),
-            # Unusable files are shown, not silently omitted (REQ-056, REQ-070).
-            "skipped_files": [{"path": k.rel_path, "reason": k.reason} for k in snapshot.skips if k.severity == "error"],
-            "chunks": [{"id": c.chunk_id, "source": c.rel_path, "score": c.score,
-                        "estimated_tokens": c.estimated_tokens, "truncated": c.truncated} for c in selection.chunks],
-            "files": list(selection.source_files),
-            "budget_tokens": selection.budget_tokens,
-            "used_tokens": selection.used_tokens,
-            "dropped_chunks": selection.dropped_count,
-            "truncated": selection.truncated,
-            "insufficient_reason": selection.insufficient_reason,
-            "token_count_method": TOKEN_METHOD,
-        }}
+        yield {
+            "event": "sources",
+            "data": {
+                "request_id": request_id,
+                "corpus_version": snapshot.version,
+                "documents": len(snapshot.documents),
+                # Unusable files are shown, not silently omitted (REQ-056, REQ-070).
+                "skipped_files": [
+                    {"path": k.rel_path, "reason": k.reason} for k in snapshot.skips if k.severity == "error"
+                ],
+                "chunks": [
+                    {
+                        "id": c.chunk_id,
+                        "source": c.rel_path,
+                        "score": c.score,
+                        "estimated_tokens": c.estimated_tokens,
+                        "truncated": c.truncated,
+                    }
+                    for c in selection.chunks
+                ],
+                "files": list(selection.source_files),
+                "budget_tokens": selection.budget_tokens,
+                "used_tokens": selection.used_tokens,
+                "dropped_chunks": selection.dropped_count,
+                "truncated": selection.truncated,
+                "insufficient_reason": selection.insufficient_reason,
+                "token_count_method": TOKEN_METHOD,
+            },
+        }
 
-        if not selection.sufficient:
+        # Testing the reason itself (not `selection.sufficient`) lets the type checker
+        # see it is a str here.
+        if selection.insufficient_reason is not None:
             text = INSUFFICIENT_REPLIES[selection.insufficient_reason]
             yield {"event": "token", "data": {"text": text}}
             outcome = "insufficient_evidence"
             root.set_attribute("chat.model_called", False)
-            yield {"event": "done", "data": {"request_id": request_id, "finish_reason": outcome,
-                                             "model_called": False, "timings_ms": timings}}
+            yield {
+                "event": "done",
+                "data": {
+                    "request_id": request_id,
+                    "finish_reason": outcome,
+                    "model_called": False,
+                    "timings_ms": timings,
+                },
+            }
             return
 
         span = stage("prompt.assembly")
@@ -186,10 +229,14 @@ async def answer(question: str, deps: ChatDeps) -> AsyncIterator[dict]:
             yield _error(request_id, outcome, partial=False)
             return
         timings["prompt_assembly_ms"] = _ms(t)
-        span.set_attributes({"prompt.estimated_tokens": prompt.estimated_prompt_tokens,
-                             "prompt.limit_tokens": s.llm_context_tokens - s.llm_max_tokens,
-                             "prompt.evidence_chunks": len(prompt.evidence_chunk_ids),
-                             "prompt.token_count_method": TOKEN_METHOD})
+        span.set_attributes(
+            {
+                "prompt.estimated_tokens": prompt.estimated_prompt_tokens,
+                "prompt.limit_tokens": s.llm_context_tokens - s.llm_max_tokens,
+                "prompt.evidence_chunks": len(prompt.evidence_chunk_ids),
+                "prompt.token_count_method": TOKEN_METHOD,
+            }
+        )
         end(span)
 
         guard = OutputGuard(prompt.messages[0]["content"])
@@ -197,14 +244,21 @@ async def answer(question: str, deps: ChatDeps) -> AsyncIterator[dict]:
         finish_reason = "unknown"
         emitted_chars = 0
         span = stage("inference.stream")
-        span.set_attributes({"llm.model": s.llm_model, "llm.temperature": s.llm_temperature, "llm.max_tokens": s.llm_max_tokens})
+        span.set_attributes(
+            {"llm.model": s.llm_model, "llm.temperature": s.llm_temperature, "llm.max_tokens": s.llm_max_tokens}
+        )
         root.set_attribute("chat.model_called", True)
         t = time.perf_counter()
         try:
             async for item in stream_chat(
-                deps.http_client, url=s.llm_url, model=s.llm_model, messages=list(prompt.messages),
-                max_tokens=s.llm_max_tokens, temperature=s.llm_temperature,
-                connect_timeout=s.llm_connect_timeout_seconds, read_timeout=s.llm_read_timeout_seconds,
+                deps.http_client,
+                url=s.llm_url,
+                model=s.llm_model,
+                messages=list(prompt.messages),
+                max_tokens=s.llm_max_tokens,
+                temperature=s.llm_temperature,
+                connect_timeout=s.llm_connect_timeout_seconds,
+                read_timeout=s.llm_read_timeout_seconds,
                 request_timeout=s.llm_request_timeout_seconds,
             ):
                 if isinstance(item, TextDelta):
@@ -247,22 +301,37 @@ async def answer(question: str, deps: ChatDeps) -> AsyncIterator[dict]:
         # Token counts: reported by the endpoint when available, otherwise estimated
         # with the documented method; always labelled (REQ-083).
         if usage is not None:
-            tokens = {"prompt": usage.prompt_tokens, "completion": usage.completion_tokens, "source": "reported"}
+            prompt_tokens, completion_tokens, token_source = usage.prompt_tokens, usage.completion_tokens, "reported"
         else:
-            tokens = {"prompt": prompt.estimated_prompt_tokens, "completion": estimate_tokens("x" * emitted_chars),
-                      "source": f"estimated ({TOKEN_METHOD})"}
-        span.set_attributes({
-            "llm.finish_reason": outcome, "llm.prompt_tokens": tokens["prompt"],
-            "llm.completion_tokens": tokens["completion"], "llm.token_count_source": tokens["source"],
-            "llm.first_token_ms": timings.get("first_token_ms", -1.0), "llm.answer_chars": emitted_chars,
-            "guard.reasoning_blocks_removed": guard.events.reasoning_removed, "guard.leak_blocked": guard.blocked,
-        })
+            prompt_tokens = prompt.estimated_prompt_tokens
+            completion_tokens = estimate_tokens("x" * emitted_chars)
+            token_source = f"estimated ({TOKEN_METHOD})"
+        tokens = {"prompt": prompt_tokens, "completion": completion_tokens, "source": token_source}
+        span.set_attributes(
+            {
+                "llm.finish_reason": outcome,
+                "llm.prompt_tokens": prompt_tokens,
+                "llm.completion_tokens": completion_tokens,
+                "llm.token_count_source": token_source,
+                "llm.first_token_ms": timings.get("first_token_ms", -1.0),
+                "llm.answer_chars": emitted_chars,
+                "guard.reasoning_blocks_removed": guard.events.reasoning_removed,
+                "guard.leak_blocked": guard.blocked,
+            }
+        )
         end(span)
-        yield {"event": "done", "data": {
-            "request_id": request_id, "finish_reason": outcome, "model_called": True,
-            "tokens": tokens, "prompt_tokens_estimated": prompt.estimated_prompt_tokens,
-            "reasoning_blocks_removed": guard.events.reasoning_removed, "timings_ms": timings,
-        }}
+        yield {
+            "event": "done",
+            "data": {
+                "request_id": request_id,
+                "finish_reason": outcome,
+                "model_called": True,
+                "tokens": tokens,
+                "prompt_tokens_estimated": prompt.estimated_prompt_tokens,
+                "reasoning_blocks_removed": guard.events.reasoning_removed,
+                "timings_ms": timings,
+            },
+        }
     except Exception:
         # Unexpected bug: still end the stream with a terminal event carrying the id.
         log.exception("chat failed")
@@ -272,7 +341,7 @@ async def answer(question: str, deps: ChatDeps) -> AsyncIterator[dict]:
         # Runs on normal completion, on errors and when the client disconnects (the
         # generator is closed; outcome stays "client_disconnected"). Every span is
         # ended so a cut-off request still appears as a complete trace.
-        for span in list(open_spans):
+        for span in open_spans:
             end(span, outcome if outcome == "client_disconnected" else None)
         total_ms = _ms(started_at)
         root.set_attributes({"chat.outcome": outcome, "chat.total_ms": total_ms})

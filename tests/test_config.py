@@ -234,3 +234,51 @@ class TestOptionalSettings:
     @pytest.mark.parametrize("timeout, expected", [("0.001", 0.001), ("10", 10.0), ("1e1", 10.0)])
     def test_edge_health_timeout_small_and_scientific(self, timeout, expected):
         assert load_settings({**VALID, "LLM_HEALTH_TIMEOUT_SECONDS": timeout}).llm_health_timeout_seconds == expected
+
+
+# ---------------------------------------------------------------------------
+# Corpus settings (CORPUS_DIR, CORPUS_MAX_FILE_BYTES, CORPUS_MAX_FILES,
+# CORPUS_SETTLE_SECONDS): REQ-013, REQ-016, REQ-041 limits, REQ-045 settle window
+# ---------------------------------------------------------------------------
+
+class TestCorpusSettings:
+    def test_positive_defaults(self):
+        s = load_settings(VALID)
+        assert (s.corpus_dir, s.corpus_max_file_bytes, s.corpus_max_files, s.corpus_settle_seconds) == (
+            "/data", 100 * 1024 * 1024, 500, 0.5)
+
+    def test_positive_overrides(self):
+        s = load_settings({**VALID, "CORPUS_DIR": "/srv/docs", "CORPUS_MAX_FILE_BYTES": "2048",
+                           "CORPUS_MAX_FILES": "10", "CORPUS_SETTLE_SECONDS": "2"})
+        assert (s.corpus_dir, s.corpus_max_file_bytes, s.corpus_max_files, s.corpus_settle_seconds) == (
+            "/srv/docs", 2048, 10, 2.0)
+
+    def test_positive_relative_corpus_dir_made_absolute(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        assert load_settings({**VALID, "CORPUS_DIR": "./data"}).corpus_dir == str(tmp_path / "data")
+
+    @pytest.mark.parametrize("name", ["CORPUS_MAX_FILE_BYTES", "CORPUS_MAX_FILES"])
+    @pytest.mark.parametrize("value", ["0", "-1", "abc", "1.5", "1e6"])
+    def test_negative_invalid_limits(self, name, value):
+        with pytest.raises(ConfigError, match=f"{name} must be a whole number of at least 1"):
+            load_settings({**VALID, name: value})
+
+    @pytest.mark.parametrize("value", ["-0.1", "abc", "nan", "inf"])
+    def test_negative_invalid_settle_seconds(self, value):
+        with pytest.raises(ConfigError, match="CORPUS_SETTLE_SECONDS must be zero or a positive number"):
+            load_settings({**VALID, "CORPUS_SETTLE_SECONDS": value})
+
+    def test_edge_settle_zero_allowed(self):
+        assert load_settings({**VALID, "CORPUS_SETTLE_SECONDS": "0"}).corpus_settle_seconds == 0.0
+
+    def test_edge_limit_of_one_allowed(self):
+        s = load_settings({**VALID, "CORPUS_MAX_FILE_BYTES": "1", "CORPUS_MAX_FILES": "1"})
+        assert (s.corpus_max_file_bytes, s.corpus_max_files) == (1, 1)
+
+    @pytest.mark.parametrize("name", ["CORPUS_DIR", "CORPUS_MAX_FILE_BYTES", "CORPUS_MAX_FILES", "CORPUS_SETTLE_SECONDS"])
+    def test_edge_blank_uses_default(self, name):
+        assert load_settings({**VALID, name: "  "}) == load_settings(VALID)
+
+    def test_edge_loading_settings_does_not_touch_filesystem(self):
+        # A non-existent CORPUS_DIR is accepted here; existence is checked at startup.
+        assert load_settings({**VALID, "CORPUS_DIR": "/definitely/not/here"}).corpus_dir == "/definitely/not/here"

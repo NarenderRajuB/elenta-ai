@@ -56,6 +56,20 @@ def test_negative_invalid_optional_setting_also_aborts():
     assert code == 2 and "APP_PORT" in stderr
 
 
+def test_negative_missing_corpus_dir_aborts(tmp_path):
+    missing = tmp_path / "no-such-dir"
+    code, stderr = _exit_of({"LLM_URL": "http://127.0.0.1:1/v1", "LLM_MODEL": "m", "CORPUS_DIR": str(missing)})
+    assert code == 2
+    assert "CORPUS_DIR is not an existing directory" in stderr and "Traceback" not in stderr
+
+
+def test_negative_corpus_dir_that_is_a_file_aborts(tmp_path):
+    a_file = tmp_path / "file.txt"
+    a_file.write_text("x", encoding="utf-8")
+    code, stderr = _exit_of({"LLM_URL": "http://127.0.0.1:1/v1", "LLM_MODEL": "m", "CORPUS_DIR": str(a_file)})
+    assert code == 2 and "CORPUS_DIR" in stderr
+
+
 def test_edge_secret_in_bad_url_not_printed():
     code, stderr = _exit_of({"LLM_URL": "ftp://user:s3cret@host", "LLM_MODEL": "m"})
     assert code == 2 and "s3cret" not in stderr
@@ -63,9 +77,12 @@ def test_edge_secret_in_bad_url_not_printed():
 
 # --- Positive: valid config starts a server with working health signals -----------
 
-def test_positive_server_starts_live_and_reports_model_unreachable():
+def test_positive_server_starts_live_and_reports_model_unreachable(tmp_path):
     app_port, dead_llm_port = _free_port(), _free_port()
+    (tmp_path / "doc.txt").write_text("hello", encoding="utf-8")
     proc = _run_app({
+        "CORPUS_DIR": str(tmp_path),
+        "CORPUS_SETTLE_SECONDS": "0",
         "LLM_URL": f"http://127.0.0.1:{dead_llm_port}/v1",
         "LLM_MODEL": "qwen2.5:0.5b",
         "APP_PORT": str(app_port),
@@ -90,3 +107,7 @@ def test_positive_server_starts_live_and_reports_model_unreachable():
     finally:
         proc.terminate()
         proc.wait(timeout=10)
+    # Startup refresh is visible in the logs: counts and names only, never content.
+    logs = proc.stderr.read()
+    assert "corpus refreshed: version=1 documents=1 added=1" in logs
+    assert "hello" not in logs

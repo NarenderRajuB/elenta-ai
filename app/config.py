@@ -22,6 +22,14 @@ DEFAULT_APP_PORT = 8000
 # Readiness probes must answer quickly; a slow model endpoint should read as
 # "not ready" rather than hang the health check.
 DEFAULT_LLM_HEALTH_TIMEOUT_SECONDS = 3.0
+# Corpus defaults (ADR-005). /data is where the brief mounts the corpus. The size and
+# count limits were chosen by the candidate; files beyond them are skipped and reported.
+DEFAULT_CORPUS_DIR = "/data"
+DEFAULT_CORPUS_MAX_FILE_BYTES = 100 * 1024 * 1024
+DEFAULT_CORPUS_MAX_FILES = 500
+# A file modified more recently than this may still be being written; it is picked up
+# on a later request instead of risking a half-written read (REQ-045).
+DEFAULT_CORPUS_SETTLE_SECONDS = 0.5
 
 
 class ConfigError(Exception):
@@ -45,6 +53,11 @@ class Settings:
     app_port: int = DEFAULT_APP_PORT
     # Upper bound on the readiness probe to the model endpoint (REQ-017).
     llm_health_timeout_seconds: float = DEFAULT_LLM_HEALTH_TIMEOUT_SECONDS
+    # Root of the document corpus; nothing outside it is ever read (REQ-064).
+    corpus_dir: str = DEFAULT_CORPUS_DIR
+    corpus_max_file_bytes: int = DEFAULT_CORPUS_MAX_FILE_BYTES
+    corpus_max_files: int = DEFAULT_CORPUS_MAX_FILES
+    corpus_settle_seconds: float = DEFAULT_CORPUS_SETTLE_SECONDS
 
 
 def _require(environ: Mapping[str, str], name: str, problems: list[str]) -> str:
@@ -95,15 +108,23 @@ def _parse_port(name: str, raw: str, problems: list[str]) -> int:
     return DEFAULT_APP_PORT
 
 
-def _parse_positive_seconds(name: str, raw: str, default: float, problems: list[str]) -> float:
+def _parse_positive_int(name: str, raw: str, default: int, problems: list[str]) -> int:
+    if raw.isdigit() and int(raw) >= 1:
+        return int(raw)
+    problems.append(f"{name} must be a whole number of at least 1")
+    return default
+
+
+def _parse_seconds(name: str, raw: str, default: float, problems: list[str], allow_zero: bool = False) -> float:
     try:
         value = float(raw)
     except ValueError:
         value = math.nan
-    # float() accepts "nan" and "inf"; neither is a usable timeout.
-    if math.isfinite(value) and value > 0:
+    # float() accepts "nan" and "inf"; neither is a usable duration.
+    if math.isfinite(value) and (value > 0 or (allow_zero and value == 0)):
         return value
-    problems.append(f"{name} must be a positive number of seconds")
+    kind = "zero or a positive" if allow_zero else "a positive"
+    problems.append(f"{name} must be {kind} number of seconds")
     return default
 
 
@@ -127,11 +148,34 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
 
     raw_timeout = _optional(environ, "LLM_HEALTH_TIMEOUT_SECONDS")
     health_timeout = (
-        _parse_positive_seconds(
-            "LLM_HEALTH_TIMEOUT_SECONDS", raw_timeout, DEFAULT_LLM_HEALTH_TIMEOUT_SECONDS, problems
-        )
+        _parse_seconds("LLM_HEALTH_TIMEOUT_SECONDS", raw_timeout, DEFAULT_LLM_HEALTH_TIMEOUT_SECONDS, problems)
         if raw_timeout
         else DEFAULT_LLM_HEALTH_TIMEOUT_SECONDS
+    )
+
+    # A relative CORPUS_DIR (handy for local runs, e.g. ./data) is made absolute against
+    # the working directory once, here, so the rest of the app sees one fixed root.
+    # Existence is checked at startup by the entry point, not here, so that loading
+    # settings never touches the filesystem.
+    corpus_dir = os.path.abspath(_optional(environ, "CORPUS_DIR") or DEFAULT_CORPUS_DIR)
+
+    raw_max_bytes = _optional(environ, "CORPUS_MAX_FILE_BYTES")
+    max_file_bytes = (
+        _parse_positive_int("CORPUS_MAX_FILE_BYTES", raw_max_bytes, DEFAULT_CORPUS_MAX_FILE_BYTES, problems)
+        if raw_max_bytes
+        else DEFAULT_CORPUS_MAX_FILE_BYTES
+    )
+    raw_max_files = _optional(environ, "CORPUS_MAX_FILES")
+    max_files = (
+        _parse_positive_int("CORPUS_MAX_FILES", raw_max_files, DEFAULT_CORPUS_MAX_FILES, problems)
+        if raw_max_files
+        else DEFAULT_CORPUS_MAX_FILES
+    )
+    raw_settle = _optional(environ, "CORPUS_SETTLE_SECONDS")
+    settle = (
+        _parse_seconds("CORPUS_SETTLE_SECONDS", raw_settle, DEFAULT_CORPUS_SETTLE_SECONDS, problems, allow_zero=True)
+        if raw_settle
+        else DEFAULT_CORPUS_SETTLE_SECONDS
     )
 
     if problems:
@@ -142,6 +186,10 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
         app_host=app_host,
         app_port=app_port,
         llm_health_timeout_seconds=health_timeout,
+        corpus_dir=corpus_dir,
+        corpus_max_file_bytes=max_file_bytes,
+        corpus_max_files=max_files,
+        corpus_settle_seconds=settle,
     )
 
 

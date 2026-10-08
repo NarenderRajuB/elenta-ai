@@ -4,7 +4,7 @@ Decision log required by brief §5.11 (REQ-110, REQ-112). Entries are appended *
 
 **Statuses**: `Proposed` (drafted, awaiting candidate acceptance) · `Accepted` · `Superseded` · `Rejected`.
 
-> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-002, ADR-011, ADR-012, ADR-013, ADR-014, ADR-015. Rejected: ADR-003.
+> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-002, ADR-005, ADR-011, ADR-012, ADR-013, ADR-014, ADR-015. Rejected: ADR-003.
 
 Template:
 
@@ -106,7 +106,7 @@ Template:
 
 ## ADR-005: Request-time corpus refresh using a stat fingerprint, with stable-read checks
 
-- **Status:** Proposed · **Date:** 2026-10-08
+- **Status:** Accepted by the candidate on 2026-10-08, with the decisions below · **Date:** 2026-10-08
 - **Requirements:** REQ-003, REQ-042, REQ-043, REQ-044, REQ-045, REQ-046, REQ-056, REQ-064, REQ-073
 
 **Context.** Corpus may change at any time; deletions must not leave stale chunks; partially written files must not produce mixed versions; Docker Desktop bind mounts on macOS do not reliably propagate inotify events into Linux containers.
@@ -124,6 +124,24 @@ Template:
 
 **Consequences.** + Simple, deterministic, platform-independent. − Per-request cost proportional to file count (one `stat` each); acceptable for a small corpus — enforce a documented max file count / max file size. − An mtime-preserving same-size overwrite could be missed; mitigation to consider: include a content hash for small files. Document limits.
 
+
+**Candidate decisions on acceptance (2026-10-08).**
+- Symlinks: **skip all** (files and directories), even if the target is inside `/data`.
+- Limits: **100 MB per file** (`CORPUS_MAX_FILE_BYTES`, the candidate's choice; the original proposal was 1 MB) and **500 files** (`CORPUS_MAX_FILES`). Files over a limit are skipped and reported (`too_large`, `file_limit_exceeded`). The count cut-off is deterministic: the first 500 paths in sorted order.
+
+**Implementation details added during the build (2026-10-08; open to the candidate's veto).**
+- **Settle window** `CORPUS_SETTLE_SECONDS` (default 0.5 s, `0` disables). A file modified more recently is skipped as `settling` and picked up on a later request. Without this, a slow copy (likely with 100 MB files) could be read half-written while its size happens to be stable during our read.
+- **While a file is changing, it is excluded, not served from cache.** Only content just read in full in its current state is served. Simpler to defend than "sometimes the previous version".
+- **Fingerprint = (size, mtime_ns, ctime_ns, inode).** ctime can't be set by `touch`/`cp -p`, so a same-size edit with a restored mtime is still detected. The inode catches atomic replace-by-rename. Verified through the Docker Desktop bind mount.
+- **Stable read:** the fingerprint at scan, at `fstat` before and after the read, and at `stat` of the path after the read must all match, and the bytes read must equal the size. Otherwise the file is skipped as `changing`.
+- **Never opened:** pipes, sockets and devices (`not_regular_file`); opening a FIFO blocks. Files are opened with `O_NOFOLLOW | O_NONBLOCK`. The real path is re-checked to be inside the root before opening (`outside_root`), in case a directory is swapped for a symlink.
+- **Content rules:** strict UTF-8 (a leading BOM is removed); NUL bytes → `binary_content`; empty, whitespace-only or BOM-only → `empty`. Extensions `.txt`/`.md` are matched case-insensitively.
+- **Hidden** = any path component starting with `.`; hidden directories are not descended into.
+- **Startup:** `CORPUS_DIR` must exist and be a directory, or the process exits with code 2. If it disappears at runtime, refresh reports `corpus_dir_missing` and serves an empty corpus.
+- **Concurrency:** refresh is serialised with a lock and runs in a worker thread (blocking file I/O off the event loop). Each refresh publishes one immutable snapshot.
+- **Logging:** one summary line per refresh (counts, version, duration) and one line per skip (path and reason). `error` reasons log at WARNING, policy skips at DEBUG. Document content is never logged.
+
+**Verified through the Docker Desktop for Mac bind mount (2026-10-08):** add, modify, same-size edit with restored mtime, atomic replace, rename and delete are each reflected on the next refresh. Stress test: 200/200 write-then-refresh cycles correct after the TS-004 fix. Host/VM clock skew measured at under 1 ms (TS-004).
 ---
 
 ## ADR-006: Trust boundaries and prompt assembly enforced in code, not delegated to the model
@@ -358,7 +376,6 @@ Template:
 
 ## Pending decisions (to be recorded as ADRs when made)
 
-- Symlink policy inside `/data` (ADR-005).
 - Chunk size, overlap, relevance threshold, default budget values (ADR-007).
 - Tooling for REQ-121/122 (e.g. `ruff`, `mypy`, `pip-audit`, `bandit`, image scan) — choose when setting up the project skeleton.
 - Test strategy: fake OpenAI-compatible streaming server for deterministic tests.

@@ -102,3 +102,31 @@ Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instea
 **Resolution (2026-10-08).** The candidate approved adding `httpx2` as a dev-only dependency. Ran `uv add --dev httpx2`, which installed `httpx2` 2.13.1, `httpcore2` 2.13.1 and `truststore` 0.10.4. Re-ran the suite: **102 passed, 0 warnings**. Runtime dependencies are unchanged (`fastapi`, `httpx`, `uvicorn`).
 
 **Remaining limitation.** The dev environment now contains two HTTP client stacks: `httpx2` for `TestClient`, `httpx` for the app. Moving the runtime client to `httpx2` stays an open question for ADR-002.
+
+---
+
+## TS-004: Fresh files skipped as "settling" even with the settle window disabled
+
+- **Date:** 2026-10-08
+- **Phase:** Feature 4 (live corpus), container test of change detection through the bind mount
+- **Related:** REQ-042, REQ-045, REQ-046, ADR-005, `app/ingestion.py`
+
+**Symptom.** `test_positive_live_changes_visible_through_bind_mount` failed intermittently. Right after the host modified a file, the container's refresh returned no document:
+```
+>  assert refresh() == {path.name: "second version"}
+E  AssertionError: assert {} == {'_pytest_live_….txt': 'second version'}
+```
+It passed 3 of 3 times on rerun, and a shell reproduction that slept 1 s between write and refresh never failed.
+
+**Diagnosis.**
+1. A stress script (host writes, container refreshes immediately, 200 cycles, `CORPUS_SETTLE_SECONDS=0`) gave `{'ok': 41, 'skip:settling': 159}`: the files were skipped as `settling` even though the window was 0.
+2. The check was `now - mtime < settle_seconds`. With `settle_seconds = 0` this is true whenever `now - mtime` is **negative**, i.e. the file's mtime is ahead of the container's clock.
+3. Measured over 50 samples: the age of a just-written file, as seen in the container, was min **-0.4 ms**, median +5.3 ms, max +253.7 ms. 6/50 samples were negative. The Docker Desktop Linux VM's clock trails macOS by a fraction of a millisecond, and file mtimes are set by the host.
+
+**Attempted actions.**
+- Shell reproduction with `sleep 1` between steps: could not reproduce, because the sleep hid the skew.
+- First stress rerun after the fix still failed (`ok: 150`). The cause was `docker compose up -d` without `--build`, which reused the old image. **Lesson:** after changing app code, use `docker compose up -d --build`.
+
+**Resolution.** The check is now `settle_seconds > 0 and now - mtime < settle_seconds`, so 0 truly disables the window. Regression test `test_edge_settle_zero_serves_even_with_slightly_future_mtime` added. After rebuilding: stress `{'ok': 200}`, container suite 15/15.
+
+**Remaining limitation.** With the default window (0.5 s), sub-millisecond skew only delays readiness by that skew, which is harmless. Larger skew (e.g. a VM clock drifting after laptop sleep) would delay readiness by the skew amount. It is never served early. This goes in the platform notes (REQ-046).

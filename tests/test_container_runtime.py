@@ -144,6 +144,62 @@ def test_positive_host_files_visible_under_data(running):
         probe.unlink(missing_ok=True)
 
 
+# Long-lived corpus inside the container: one refresh per stdin line, one JSON result per
+# refresh. Lets the host change files between refreshes, exactly as requests would see it.
+REFRESH_LOOP = (
+    "import sys, json\n"
+    "from app.corpus import Corpus\n"
+    "c = Corpus('/data', 100 * 1024 * 1024, 500, 0.0)\n"
+    "for line in sys.stdin:\n"
+    "    s = c.refresh()\n"
+    "    print(json.dumps({d.rel_path: d.text for d in s.documents if d.rel_path.startswith(line.strip())}), flush=True)\n"
+)
+
+
+def test_positive_live_changes_visible_through_bind_mount(running):
+    # REQ-042/044/046: host edits reach the container through the bind mount with the
+    # metadata the change detection relies on (size, mtime, ctime, inode).
+    import json
+    name = running()
+    prefix = f"_pytest_live_{uuid.uuid4().hex[:6]}"
+    path = ROOT / "data" / f"{prefix}.txt"
+    proc = subprocess.Popen(["docker", "exec", "-i", name, "python", "-u", "-c", REFRESH_LOOP],
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+
+    def refresh() -> dict:
+        proc.stdin.write(prefix + "\n")
+        proc.stdin.flush()
+        return json.loads(proc.stdout.readline())
+
+    try:
+        path.write_text("first", encoding="utf-8")
+        assert refresh() == {path.name: "first"}
+        path.write_text("second version", encoding="utf-8")
+        assert refresh() == {path.name: "second version"}
+        # Same size, mtime forced back: only ctime reveals the change.
+        st = path.stat()
+        time.sleep(0.05)
+        path.write_text("SECOND VERSION", encoding="utf-8")
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+        assert refresh() == {path.name: "SECOND VERSION"}
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text("atomically replaced", encoding="utf-8")
+        os.replace(tmp, path)
+        assert refresh() == {path.name: "atomically replaced"}
+        path.unlink()
+        assert refresh() == {}
+    finally:
+        path.unlink(missing_ok=True)
+        proc.stdin.close()
+        proc.wait(timeout=10)
+
+
+def test_positive_startup_log_reports_corpus(running):
+    name = running()
+    logs = _docker("logs", name).stderr
+    assert "corpus refreshed:" in logs
+
+
 # --- Negative --------------------------------------------------------------------
 
 def test_negative_missing_config_exits_2_with_clear_message():
@@ -152,6 +208,14 @@ def test_negative_missing_config_exits_2_with_clear_message():
     output = result.stdout + result.stderr
     assert "LLM_URL is required" in output and "LLM_MODEL is required" in output
     assert "Traceback" not in output
+
+
+def test_negative_missing_corpus_mount_aborts_startup():
+    # Image run without the /data mount: a deployment mistake, so fail fast (exit 2).
+    env_args = [arg for k, v in VALID_ENV.items() for arg in ("-e", f"{k}={v}")]
+    result = _docker("run", "--rm", *env_args, "elenta-ai:local")
+    assert result.returncode == 2
+    assert "CORPUS_DIR is not an existing directory: /data" in result.stderr
 
 
 def test_negative_corpus_mount_is_read_only(running):
@@ -190,7 +254,10 @@ def test_edge_starts_with_no_network_at_all():
     # the host route, so readiness must report the model unreachable, not hang.
     name = f"{PROJECT}-offline-{uuid.uuid4().hex[:6]}"
     env_args = [arg for k, v in VALID_ENV.items() for arg in ("-e", f"{k}={v}")]
+    # Same read-only /data mount as compose.yaml: without it the app refuses to start
+    # (CORPUS_DIR must exist), which is covered by its own test.
     result = _docker("run", "-d", "--name", name, "--network", "none", "--read-only",
+                     "-v", f"{ROOT / 'data'}:/data:ro",
                      *env_args, "-e", "APP_HOST=127.0.0.1", "elenta-ai:local")
     assert result.returncode == 0, result.stderr
     try:

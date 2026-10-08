@@ -28,6 +28,7 @@ The full operator guide (architecture, setup, configuration, operations, securit
 | Python tooling | `uv` with a committed `uv.lock` | ADR-014 |
 | Health signals | `/healthz` liveness, `/readyz` readiness (probes the model endpoint) | ADR-015 |
 | Container | Pinned slim base, non-root UID 10001, read-only root FS and `/data`, no capabilities, loopback-only port | ADR-012 |
+| Live corpus | Re-scan `/data` at the start of each request; reuse unchanged files; one immutable snapshot per refresh | ADR-005 |
 
 ## Prerequisites (so far)
 
@@ -62,8 +63,10 @@ Docker / Compose prerequisites will be listed when the container feature lands.
 
 ```bash
 uv sync
-LLM_URL=http://localhost:11434/v1 LLM_MODEL=qwen2.5:0.5b uv run python -m app
+LLM_URL=http://localhost:11434/v1 LLM_MODEL=qwen2.5:0.5b CORPUS_DIR=./data uv run python -m app
 ```
+
+`CORPUS_DIR=./data` is needed outside Docker because the default `/data` only exists in the container.
 
 When running directly on the Mac, `LLM_URL` uses `localhost`. `host.docker.internal` (as in `.env.example`) only resolves from inside a container.
 
@@ -111,7 +114,7 @@ Run a single requirement's tests, for example:
 uv run pytest -v tests/test_config.py::TestReq016FailFast
 ```
 
-Current result: **120 passed, 0 warnings** (default run) and **12 passed** (`-m container`). Dev-only dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
+Current result: **208 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Dev-only dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
 
 ## Configuration
 
@@ -124,10 +127,50 @@ All configuration is via environment variables (REQ-013). [`.env.example`](.env.
 | `APP_HOST` | No (default `127.0.0.1`) | `127.0.0.1` | Interface the server binds to. Loopback keeps a local run off the network; a container must use `0.0.0.0`. |
 | `APP_PORT` | No (default `8000`) | `8000` | Server port, whole number 1–65535. |
 | `LLM_HEALTH_TIMEOUT_SECONDS` | No (default `3`) | `3` | Max wait for the `/readyz` model probe; positive, finite seconds. |
+| `CORPUS_DIR` | No (default `/data`) | `/data` | Corpus root; nothing outside it is read. A relative path is made absolute. Must exist at startup (exit 2 otherwise). Fixed to `/data` in Compose. |
+| `CORPUS_MAX_FILE_BYTES` | No (default `104857600` = 100 MB) | `104857600` | Larger files are skipped (`too_large`). Whole number ≥ 1. |
+| `CORPUS_MAX_FILES` | No (default `500`) | `500` | Supported files beyond this (in sorted path order) are skipped (`file_limit_exceeded`). Whole number ≥ 1. |
+| `CORPUS_SETTLE_SECONDS` | No (default `0.5`) | `0.5` | A file modified more recently is treated as still being written and picked up later. `0` disables. |
 
 A blank optional value means "use the default".
 
 If anything is missing or invalid, loading fails with **one** error that lists every problem. The error never repeats the URL value, because it may contain credentials.
+
+## Live corpus
+
+**Supported formats:** UTF-8 text files with extension `.txt` or `.md` (case-insensitive), in `CORPUS_DIR` and its subdirectories. A leading UTF-8 BOM is removed. Markdown is read as plain text; it is never rendered or executed.
+
+**Limits:** up to 100 MB per file and 500 files (both configurable). Anything over a limit is skipped and reported, never silently dropped.
+
+**How changes are picked up (ADR-005):** every chat request (the chat feature comes next) starts with a refresh. The refresh re-scans the directory, reuses files whose `(size, mtime, ctime, inode)` is unchanged, re-reads new or changed files, and drops anything no longer present. Each request sees exactly one complete snapshot.
+
+**When a change is ready to serve:** on the first request that starts after the file has been unmodified for `CORPUS_SETTLE_SECONDS` (0.5 s by default) and is then read without changing. Until then the file is **not served at all**, not even its previous version.
+
+**Skip reasons** (logged as `corpus file skipped: path=… reason=…`; content is never logged):
+
+| Reason | Severity | Meaning |
+|---|---|---|
+| `hidden` | info | Name (or a parent directory) starts with `.` |
+| `symlink` | info | Symbolic link: never followed, even if the target is inside the corpus |
+| `unsupported_type` | info | Not `.txt` / `.md` |
+| `not_regular_file` | info | Pipe, socket or device: never opened |
+| `empty` | info | Zero bytes, whitespace only, or BOM only |
+| `settling` | info | Modified within the settle window; retried next request |
+| `too_large` | error | Over `CORPUS_MAX_FILE_BYTES` |
+| `file_limit_exceeded` | error | Beyond `CORPUS_MAX_FILES` |
+| `changing` | error | Changed while being read; retried next request |
+| `not_utf8` | error | Not valid UTF-8 |
+| `binary_content` | error | Contains NUL bytes |
+| `unreadable` | error | Permission denied or I/O error (file or directory) |
+| `invalid_filename` | error | Name is not valid UTF-8 |
+| `outside_root` | error | Real path resolves outside the corpus root |
+| `corpus_dir_missing` | error | Corpus root vanished at runtime; empty corpus served |
+
+`error` reasons log at WARNING; `info` reasons at DEBUG.
+
+**Platform notes (Docker Desktop for Mac, verified):** the bind mount passes size, mtime, ctime and inode through, so every change type is detected. No file watcher is used, so inotify limitations of Docker Desktop don't apply. The VM clock trails macOS by under 1 ms; this only delays readiness by that amount (TS-004). Native Linux is not tested here.
+
+**Rebuild after code changes:** `docker compose up -d --build`. Without `--build`, Compose reuses the old image (TS-004).
 
 ## Implemented requirements
 
@@ -247,6 +290,104 @@ Code: `Dockerfile`, `compose.yaml`, `.dockerignore` · Tests: `tests/test_contai
 | ⚠️ | Started with `--network none` | `/healthz` 200, `/readyz` 503 `unreachable`, so no internet is needed to start | 012 |
 | ⚠️ | Native Linux Docker | `host.docker.internal:host-gateway` alias present (not tested on Linux) | 046 |
 
+### REQ-041: Supported formats (and limits)
+Code: `app/ingestion.py` · Tests: `tests/test_corpus.py::TestReq041Formats`, `::TestLimits`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | `.txt` and `.md` files | Served with exact text |
+| ✅ | Nested directories | Served with POSIX relative path (`policies/hr/leave.md`) |
+| ✅ | File exactly at the size limit | Served |
+| ❌ | `.pdf`, `.png`, `.json`, no extension, `.txt.gz` | Skipped `unsupported_type` |
+| ❌ | File over the size limit | Skipped `too_large` **without being read** |
+| ❌ | More supported files than `CORPUS_MAX_FILES` | First N in sorted order served; rest `file_limit_exceeded` |
+| ⚠️ | `UPPER.TXT`, `Mixed.Md` | Served (case-insensitive) |
+| ⚠️ | UTF-8 BOM | Removed |
+| ⚠️ | Unicode / spaces in filename; non-Latin content and emoji | Served unchanged |
+| ⚠️ | Hidden/unsupported files | Don't count towards the file limit |
+| ⚠️ | File grows past the limit between scan and read | Not served |
+
+### REQ-042 / REQ-003: Add, modify, rename, remove reflected without restart
+Code: `app/corpus.py` · Tests: `tests/test_corpus.py::TestReq042LiveChanges`, container `test_positive_live_changes_visible_through_bind_mount`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | File added | Served on next refresh (`added=1`) |
+| ✅ | File modified | Only the new content served (`modified=1`) |
+| ✅ | File renamed | Old path gone, new path served (`removed=1`, `added=1`) |
+| ✅ | Nothing changed | No file re-read (`unchanged`); version unchanged |
+| ✅ | Same changes made on the Mac, seen in the container | Each reflected through the bind mount |
+| ⚠️ | Same-size edit with mtime forced back | Detected via ctime |
+| ⚠️ | Atomic save (write temp file, rename over original) | Detected via inode |
+| ⚠️ | 20 rapid successive edits | Each refresh shows the latest |
+| ⚠️ | 200 write-then-refresh cycles through the bind mount (manual stress) | 200/200 correct (TS-004) |
+
+### REQ-044: Removed documents stop contributing
+Tests: `tests/test_corpus.py::TestReq044Deletion`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | File deleted | Gone from the next snapshot (`removed=1`) |
+| ✅ | Deleted content | Appears nowhere in the snapshot or store |
+| ❌ | Directory with files deleted | All its documents gone |
+| ⚠️ | Served file becomes corrupt | Not served from cache; skipped `not_utf8` |
+| ⚠️ | Corpus root removed while running | Empty corpus, `corpus_dir_missing`; no crash |
+
+### REQ-045: Rapid changes and partial writes never served mixed
+Tests: `tests/test_corpus.py::TestReq045PartialWrites`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | File within the settle window, then settled | `settling` first, then served |
+| ❌ | File appended to while being read | Skipped `changing`; not served |
+| ❌ | Previously served file is mid-change | Neither old nor new version served until stable |
+| ⚠️ | mtime an hour in the future | Waits (`settling`), never served early |
+| ⚠️ | `CORPUS_SETTLE_SECONDS=0` with mtime 50 ms ahead (VM clock skew) | Served (regression for TS-004) |
+| ⚠️ | 4 threads refreshing concurrently | No errors; consistent snapshot |
+
+### REQ-056 / REQ-073: Unreadable or corrupt files don't take down the service
+Tests: `tests/test_corpus.py::TestReq056CorruptFiles`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ❌ | Invalid UTF-8 / NUL byte / zero bytes / whitespace only / BOM only | Skipped (`not_utf8` / `binary_content` / `empty`); valid files still served |
+| ❌ | Permission-denied file | `unreadable`; other files served |
+| ❌ | Permission-denied subdirectory | `unreadable` for the directory; other files served |
+| ⚠️ | Logging | One WARNING per error skip, with path and reason only; no content |
+| ⚠️ | Policy skips (`.gitkeep`, `.pdf`) | Not logged as warnings |
+| ⚠️ | Non-UTF-8 filename | Detected (`invalid_filename`) |
+
+### REQ-064: Reads restricted to the corpus root
+Tests: `tests/test_corpus.py::TestReq064Boundary`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | Files under the root | Served; sibling files outside the root never read |
+| ❌ | Symlinked file (target inside the root) | Skipped `symlink` |
+| ❌ | Symlink to a file outside the root | Skipped; target content never read |
+| ❌ | Symlinked directory | Not traversed |
+| ❌ | Hidden file or hidden directory | Skipped `hidden`; not descended |
+| ❌ | FIFO named `pipe.txt` | Skipped `not_regular_file` immediately (never blocks) |
+| ⚠️ | File swapped for a symlink between scan and read | Not followed (`O_NOFOLLOW`) |
+| ⚠️ | Directory swapped for a symlink between scan and read | `outside_root` |
+| ⚠️ | Hand-built path `../x.txt` | `outside_root` |
+| ⚠️ | Root missing, or root is a file | `corpus_dir_missing`; no crash |
+
+### Corpus settings (REQ-013 / REQ-016)
+Tests: `tests/test_config.py::TestCorpusSettings`, `tests/test_entrypoint.py`, container tests
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | Defaults | `/data`, 100 MB, 500 files, 0.5 s |
+| ✅ | Overrides; relative `./data` | Applied; made absolute |
+| ❌ | Limits `0`, `-1`, `abc`, `1.5`, `1e6` | "must be a whole number of at least 1" |
+| ❌ | Settle `-0.1`, `abc`, `nan`, `inf` | "must be zero or a positive number of seconds" |
+| ❌ | `CORPUS_DIR` missing, or a file | Exit code 2, clear message |
+| ❌ | Container run without the `/data` mount | Exit code 2 |
+| ⚠️ | Settle `0`; limits of `1` | Accepted |
+| ⚠️ | Blank value | Default |
+| ⚠️ | Startup log | `corpus refreshed: version=1 documents=1 added=1 …`; no content |
+
 ### REQ-091: Every source file opens with a header comment block
 Tests: `tests/test_file_headers.py`
 
@@ -265,11 +406,14 @@ app/
   __init__.py        package marker
   __main__.py        entry point: validate config, then serve (REQ-016)
   config.py          configuration boundary (REQ-013..016)
+  corpus.py          corpus state: refresh, snapshot, change stats (ADR-005)
+  ingestion.py       safe file discovery and reading under the corpus root
   health.py          model endpoint readiness probe (REQ-017)
   main.py            FastAPI app factory, /healthz and /readyz (REQ-017)
 data/                corpus, mounted read-only at /data (only .gitkeep so far)
 tests/
   test_config.py     config tests by requirement
+  test_corpus.py     ingestion and live-corpus tests by requirement
   test_container_config.py   static checks of compose.yaml / Dockerfile
   test_container_runtime.py  real containers (-m container)
   test_health.py     health/readiness with a fake model endpoint

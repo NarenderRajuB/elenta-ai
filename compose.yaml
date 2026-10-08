@@ -18,6 +18,12 @@ services:
       # network is controlled by the host-side 127.0.0.1 binding, not by APP_HOST.
       APP_HOST: 0.0.0.0
       APP_PORT: "8000"
+      # Fixed: must match the volume target below.
+      CORPUS_DIR: /data
+      # Optional limits; empty means the documented defaults (100 MB, 500 files, 0.5 s).
+      CORPUS_MAX_FILE_BYTES: ${CORPUS_MAX_FILE_BYTES:-}
+      CORPUS_MAX_FILES: ${CORPUS_MAX_FILES:-}
+      CORPUS_SETTLE_SECONDS: ${CORPUS_SETTLE_SECONDS:-}
     ports:
       # Published on host loopback only: reachable from this machine, not the LAN.
       - "127.0.0.1:8000:8000"

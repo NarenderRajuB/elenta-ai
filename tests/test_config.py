@@ -245,7 +245,7 @@ class TestCorpusSettings:
     def test_positive_defaults(self):
         s = load_settings(VALID)
         assert (s.corpus_dir, s.corpus_max_file_bytes, s.corpus_max_files, s.corpus_settle_seconds) == (
-            "/data", 100 * 1024 * 1024, 500, 0.5)
+            "/data", 50 * 1024 * 1024, 500, 0.5)
 
     def test_positive_overrides(self):
         s = load_settings({**VALID, "CORPUS_DIR": "/srv/docs", "CORPUS_MAX_FILE_BYTES": "2048",
@@ -282,3 +282,37 @@ class TestCorpusSettings:
     def test_edge_loading_settings_does_not_touch_filesystem(self):
         # A non-existent CORPUS_DIR is accepted here; existence is checked at startup.
         assert load_settings({**VALID, "CORPUS_DIR": "/definitely/not/here"}).corpus_dir == "/definitely/not/here"
+
+
+# ---------------------------------------------------------------------------
+# Selection settings (CHUNK_MAX_CHARS, CONTEXT_TOKEN_BUDGET, SELECTION_MIN_SCORE):
+# REQ-055 explicit budget, REQ-050 selection, REQ-016 fail fast
+# ---------------------------------------------------------------------------
+
+class TestSelectionSettings:
+    def test_positive_defaults(self):
+        s = load_settings(VALID)
+        assert (s.chunk_max_chars, s.context_token_budget, s.selection_min_score) == (800, 1500, 0.0)
+
+    def test_positive_overrides(self):
+        s = load_settings({**VALID, "CHUNK_MAX_CHARS": "400", "CONTEXT_TOKEN_BUDGET": "900", "SELECTION_MIN_SCORE": "1.25"})
+        assert (s.chunk_max_chars, s.context_token_budget, s.selection_min_score) == (400, 900, 1.25)
+
+    @pytest.mark.parametrize("name", ["CHUNK_MAX_CHARS", "CONTEXT_TOKEN_BUDGET"])
+    @pytest.mark.parametrize("value", ["0", "-5", "abc", "2.5"])
+    def test_negative_invalid_sizes(self, name, value):
+        with pytest.raises(ConfigError, match=f"{name} must be a whole number of at least 1"):
+            load_settings({**VALID, name: value})
+
+    @pytest.mark.parametrize("value", ["-0.1", "abc", "nan", "inf"])
+    def test_negative_invalid_min_score(self, value):
+        with pytest.raises(ConfigError, match="SELECTION_MIN_SCORE must be zero or a positive number"):
+            load_settings({**VALID, "SELECTION_MIN_SCORE": value})
+
+    @pytest.mark.parametrize("name", ["CHUNK_MAX_CHARS", "CONTEXT_TOKEN_BUDGET", "SELECTION_MIN_SCORE"])
+    def test_edge_blank_uses_default(self, name):
+        assert load_settings({**VALID, name: ""}) == load_settings(VALID)
+
+    def test_edge_minimums_accepted(self):
+        s = load_settings({**VALID, "CHUNK_MAX_CHARS": "1", "CONTEXT_TOKEN_BUDGET": "1", "SELECTION_MIN_SCORE": "0"})
+        assert (s.chunk_max_chars, s.context_token_budget, s.selection_min_score) == (1, 1, 0.0)

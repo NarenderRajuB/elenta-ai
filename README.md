@@ -29,15 +29,37 @@ The full operator guide (architecture, setup, configuration, operations, securit
 | Health signals | `/healthz` liveness, `/readyz` readiness (probes the model endpoint) | ADR-015 |
 | Container | Pinned slim base, non-root UID 10001, read-only root FS and `/data`, no capabilities, loopback-only port | ADR-012 |
 | Live corpus | Re-scan `/data` at the start of each request; reuse unchanged files; one immutable snapshot per refresh | ADR-005 |
+| Evidence selection | 800-char chunks, BM25 keyword ranking, 1500-token evidence budget, tokens estimated as chars/4 | ADR-007 |
 
 ## Prerequisites (so far)
 
 - [uv](https://docs.astral.sh/uv/) 0.11+ (it provides Python 3.12 from `.python-version`)
-- Ollama running on the host with `qwen2.5:0.5b` pulled (`ollama pull qwen2.5:0.5b`). Needed to see `/readyz` report *ready*. The automated tests do **not** need it.
+- Ollama running on the host with `qwen2.5:0.5b` pulled (`ollama pull qwen2.5:0.5b`), context pinned to 4096 tokens (see [Ollama setup](#ollama-setup)). Needed to see `/readyz` report *ready*. The automated tests do **not** need it.
 
 - Docker Desktop (tested: 4.94, Compose v5.5.1) for the containerised run.
 
 Internet is needed once, for `uv sync`, `ollama pull` and the first `docker compose build`, which pulls the pinned `python:3.12-slim` base. After that everything runs offline.
+
+## Ollama setup
+
+The app's evidence budget (1500 tokens) assumes the model server's context window is **4096 tokens**. Ollama otherwise picks it from available VRAM ("4k/32k/256k"), which would vary between machines (TS-005). For the macOS Ollama app:
+
+```bash
+launchctl setenv OLLAMA_CONTEXT_LENGTH 4096   # pin the context window
+launchctl setenv OLLAMA_NO_CLOUD 1            # disable Ollama's cloud features (offline posture, REQ-012)
+# both are lost on reboot: re-run after restarting the Mac
+# then quit Ollama from the menu bar and reopen it
+ollama run qwen2.5:0.5b "hi" >/dev/null && ollama ps   # CONTEXT column must show 4096
+```
+
+`ollama ps` lists only *loaded* models; an empty table just means the model was unloaded after 5 minutes idle.
+
+To confirm the running server picked up both settings:
+
+```bash
+ps eww -o command= -p "$(pgrep -f 'ollama serve' | head -1)" | tr ' ' '\n' | grep -E 'OLLAMA_(CONTEXT_LENGTH|NO_CLOUD)'
+# expected: OLLAMA_CONTEXT_LENGTH=4096 and OLLAMA_NO_CLOUD=1
+```
 
 ## Running with Docker Compose
 
@@ -114,7 +136,7 @@ Run a single requirement's tests, for example:
 uv run pytest -v tests/test_config.py::TestReq016FailFast
 ```
 
-Current result: **208 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Dev-only dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
+Current result: **280 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Dev-only dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
 
 ## Configuration
 
@@ -128,9 +150,12 @@ All configuration is via environment variables (REQ-013). [`.env.example`](.env.
 | `APP_PORT` | No (default `8000`) | `8000` | Server port, whole number 1–65535. |
 | `LLM_HEALTH_TIMEOUT_SECONDS` | No (default `3`) | `3` | Max wait for the `/readyz` model probe; positive, finite seconds. |
 | `CORPUS_DIR` | No (default `/data`) | `/data` | Corpus root; nothing outside it is read. A relative path is made absolute. Must exist at startup (exit 2 otherwise). Fixed to `/data` in Compose. |
-| `CORPUS_MAX_FILE_BYTES` | No (default `104857600` = 100 MB) | `104857600` | Larger files are skipped (`too_large`). Whole number ≥ 1. |
+| `CORPUS_MAX_FILE_BYTES` | No (default `52428800` = 50 MB) | `52428800` | Larger files are skipped (`too_large`). Whole number ≥ 1. |
 | `CORPUS_MAX_FILES` | No (default `500`) | `500` | Supported files beyond this (in sorted path order) are skipped (`file_limit_exceeded`). Whole number ≥ 1. |
 | `CORPUS_SETTLE_SECONDS` | No (default `0.5`) | `0.5` | A file modified more recently is treated as still being written and picked up later. `0` disables. |
+| `CHUNK_MAX_CHARS` | No (default `800`) | `800` | Target maximum characters per evidence chunk (~200 estimated tokens). Whole number ≥ 1. |
+| `CONTEXT_TOKEN_BUDGET` | No (default `1500`) | `1500` | Maximum **estimated** tokens of evidence per question. Must stay well below the model's context (4096). Whole number ≥ 1. |
+| `SELECTION_MIN_SCORE` | No (default `0`) | `0` | BM25 score a chunk must exceed to count as evidence. `0` = shares at least one meaningful word with the question. |
 
 A blank optional value means "use the default".
 
@@ -140,7 +165,7 @@ If anything is missing or invalid, loading fails with **one** error that lists e
 
 **Supported formats:** UTF-8 text files with extension `.txt` or `.md` (case-insensitive), in `CORPUS_DIR` and its subdirectories. A leading UTF-8 BOM is removed. Markdown is read as plain text; it is never rendered or executed.
 
-**Limits:** up to 100 MB per file and 500 files (both configurable). Anything over a limit is skipped and reported, never silently dropped.
+**Limits:** up to 50 MB per file and 500 files (both configurable). Anything over a limit is skipped and reported, never silently dropped.
 
 **How changes are picked up (ADR-005):** every chat request (the chat feature comes next) starts with a refresh. The refresh re-scans the directory, reuses files whose `(size, mtime, ctime, inode)` is unchanged, re-reads new or changed files, and drops anything no longer present. Each request sees exactly one complete snapshot.
 
@@ -171,6 +196,20 @@ If anything is missing or invalid, loading fails with **one** error that lists e
 **Platform notes (Docker Desktop for Mac, verified):** the bind mount passes size, mtime, ctime and inode through, so every change type is detected. No file watcher is used, so inotify limitations of Docker Desktop don't apply. The VM clock trails macOS by under 1 ms; this only delays readiness by that amount (TS-004). Native Linux is not tested here.
 
 **Rebuild after code changes:** `docker compose up -d --build`. Without `--build`, Compose reuses the old image (TS-004).
+
+## Evidence selection
+
+1. The question is reduced to meaningful words (English stop words like "what", "is", "the" removed).
+2. Every chunk is scored with **BM25**: more question words, rarer words and shorter chunks score higher.
+3. Chunks scoring above `SELECTION_MIN_SCORE` are ranked (ties broken by chunk ID, so results are reproducible).
+4. Chunks are added in rank order until `CONTEXT_TOKEN_BUDGET` is reached. A chunk that doesn't fit is dropped and the next one tried. Only if the top chunk alone is too big is it **truncated**, and then it is marked as such.
+5. If nothing qualifies, the result says why: `empty_corpus`, `no_meaningful_terms` or `no_relevant_evidence`. The chat feature will answer "not enough evidence" **without calling the model**.
+
+**Chunk IDs** look like `policies/leave.md#2:9f3c1a07`: file, position, and a hash of the exact text. Editing the text changes the ID.
+
+**Token counts here are estimates** (`ceil(characters / 4)`, labelled `estimated`), because the app doesn't use the model's own tokenizer, which keeps it endpoint-agnostic.
+
+**Known limits:** exact word matching only (no synonyms: "holiday" ≠ "leave"; no stemming: "reimbursement" ≠ "reimbursed"); English stop words; estimates undercount for CJK text. **Large files:** a 19 MB file took 2.5 s to index and ~630 MB of memory; a file near the 50 MB limit would take roughly 6–7 s and ~1.6 GB, paid on the first request after it changes (ADR-007).
 
 ## Implemented requirements
 
@@ -378,7 +417,7 @@ Tests: `tests/test_config.py::TestCorpusSettings`, `tests/test_entrypoint.py`, c
 
 | Type | Scenario | Expected |
 |---|---|---|
-| ✅ | Defaults | `/data`, 100 MB, 500 files, 0.5 s |
+| ✅ | Defaults | `/data`, 50 MB, 500 files, 0.5 s |
 | ✅ | Overrides; relative `./data` | Applied; made absolute |
 | ❌ | Limits `0`, `-1`, `abc`, `1.5`, `1e6` | "must be a whole number of at least 1" |
 | ❌ | Settle `-0.1`, `abc`, `nan`, `inf` | "must be zero or a positive number of seconds" |
@@ -387,6 +426,91 @@ Tests: `tests/test_config.py::TestCorpusSettings`, `tests/test_entrypoint.py`, c
 | ⚠️ | Settle `0`; limits of `1` | Accepted |
 | ⚠️ | Blank value | Default |
 | ⚠️ | Startup log | `corpus refreshed: version=1 documents=1 added=1 …`; no content |
+
+### REQ-050: Deliberate evidence selection
+Code: `app/chunking.py`, `app/index.py`, `app/selection.py` · Tests: `tests/test_selection.py::TestReq050Chunking`, `::TestReq050Ranking`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | Short paragraphs | Packed into one chunk |
+| ✅ | Paragraphs over the limit | Split at paragraph boundaries |
+| ✅ | Long paragraph | Cut at whitespace; every chunk ≤ limit |
+| ✅ | "How many days of annual leave…" over leave + expenses docs | Leave doc ranks first |
+| ✅ | Word in both docs + word in one | The rarer word decides the ranking |
+| ✅ | "What is the leave policy for the team?" | Terms `leave`, `policy`, `team` |
+| ❌ | No question word in the corpus | `no_relevant_evidence` |
+| ❌ | `SELECTION_MIN_SCORE` raised above all scores | `no_relevant_evidence` |
+| ⚠️ | No whitespace in a long run | Hard cut at the limit |
+| ⚠️ | Windows line endings / blank-line runs | Normalised |
+| ⚠️ | Chunking loses no words | Rejoined text equals the original |
+| ⚠️ | Upper-case question | Matches (case-insensitive) |
+| ⚠️ | "reimbursement" vs "reimbursed" | No match (documented no-stemming limit) |
+| ⚠️ | Identical scores | Deterministic order by chunk ID |
+| ⚠️ | Repeated question word | Counted once |
+
+### REQ-051: Stable chunk identifiers naming the source
+Tests: `tests/test_selection.py::TestReq051ChunkIds`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | ID format | `path#ordinal:8-hex-hash` |
+| ✅ | Same content twice | Same IDs |
+| ❌ | Content edited | Hash part changes; path and ordinal stay |
+| ⚠️ | File renamed | Path part changes; hash stays |
+
+### Index freshness (REQ-044, index side)
+Tests: `tests/test_selection.py::TestIndexFreshness`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | Corpus unchanged | Same index object reused (no rebuild) |
+| ❌ | Document deleted | Its words no longer selectable |
+| ❌ | Document modified | Old words gone, new words selectable |
+| ⚠️ | Internal chunk cache | Deleted document evicted |
+
+### REQ-053 / REQ-075: Insufficient evidence detected before the model
+Tests: `tests/test_selection.py::TestReq053Insufficient`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | Relevant chunk exists | `sufficient` |
+| ❌ | Empty corpus | `empty_corpus` |
+| ❌ | Only stop words ("what is the") | `no_meaningful_terms` |
+| ❌ | Unrelated question ("Who won the 1966 World Cup?") | `no_relevant_evidence` |
+| ⚠️ | Empty, whitespace, punctuation-only or emoji-only question | `no_meaningful_terms` |
+| ⚠️ | Corpus with only unsupported files | `empty_corpus` |
+
+### REQ-055 / REQ-071: Explicit token budget, no silent overflow
+Tests: `tests/test_selection.py::TestReq055Budget`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | Many matching chunks | Used tokens ≤ budget; sum of chunk estimates = used |
+| ✅ | Chunks left out | `dropped_count` recorded; first 10 listed with scores |
+| ✅ | Everything fits | Nothing dropped or truncated |
+| ❌ | Corpus far larger than the budget (60 docs, budget 500) | Within budget; drops recorded |
+| ❌ | Single chunk larger than the budget | Truncated to fit, marked `truncated` |
+| ⚠️ | Mid-ranked chunk doesn't fit | Dropped; a smaller lower-ranked chunk fills the space |
+| ⚠️ | Budget of 1 token | Truncated, ≤ 1 token |
+| ⚠️ | Several chunks from one file | Source files listed once, in rank order |
+
+### Token estimation (REQ-083, estimate side)
+Tests: `tests/test_selection.py::TestTokenEstimate`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | `""`, `a`, `abcd`, `abcde`, 400 chars | 0, 1, 1, 2, 100 |
+| ⚠️ | Method label | `chars/4` (published with every estimate) |
+
+### Selection settings (REQ-013 / REQ-016)
+Tests: `tests/test_config.py::TestSelectionSettings`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | Defaults; overrides | 800 / 1500 / 0; applied |
+| ❌ | Sizes `0`, `-5`, `abc`, `2.5` | "must be a whole number of at least 1" |
+| ❌ | Min score `-0.1`, `abc`, `nan`, `inf` | "must be zero or a positive number" |
+| ⚠️ | Blank; minimum values | Default; accepted |
 
 ### REQ-091: Every source file opens with a header comment block
 Tests: `tests/test_file_headers.py`
@@ -406,14 +530,19 @@ app/
   __init__.py        package marker
   __main__.py        entry point: validate config, then serve (REQ-016)
   config.py          configuration boundary (REQ-013..016)
+  chunking.py        paragraph-aware chunks with stable IDs (ADR-007)
   corpus.py          corpus state: refresh, snapshot, change stats (ADR-005)
+  index.py           BM25 index, rebuilt per corpus version (ADR-007)
   ingestion.py       safe file discovery and reading under the corpus root
   health.py          model endpoint readiness probe (REQ-017)
   main.py            FastAPI app factory, /healthz and /readyz (REQ-017)
+  selection.py       ranking + token budget -> evidence for one question
+  tokens.py          token estimate (chars/4), labelled "estimated"
 data/                corpus, mounted read-only at /data (only .gitkeep so far)
 tests/
   test_config.py     config tests by requirement
   test_corpus.py     ingestion and live-corpus tests by requirement
+  test_selection.py  chunking, BM25, budget, insufficient-evidence tests
   test_container_config.py   static checks of compose.yaml / Dockerfile
   test_container_runtime.py  real containers (-m container)
   test_health.py     health/readiness with a fake model endpoint

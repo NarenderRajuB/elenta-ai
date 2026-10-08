@@ -25,11 +25,20 @@ DEFAULT_LLM_HEALTH_TIMEOUT_SECONDS = 3.0
 # Corpus defaults (ADR-005). /data is where the brief mounts the corpus. The size and
 # count limits were chosen by the candidate; files beyond them are skipped and reported.
 DEFAULT_CORPUS_DIR = "/data"
-DEFAULT_CORPUS_MAX_FILE_BYTES = 100 * 1024 * 1024
+DEFAULT_CORPUS_MAX_FILE_BYTES = 50 * 1024 * 1024
 DEFAULT_CORPUS_MAX_FILES = 500
 # A file modified more recently than this may still be being written; it is picked up
 # on a later request instead of risking a half-written read (REQ-045).
 DEFAULT_CORPUS_SETTLE_SECONDS = 0.5
+# Evidence selection defaults (ADR-007), chosen by the candidate. A chunk of about 800
+# characters is roughly 200 estimated tokens; a 1500-token evidence budget fits
+# comfortably in the 4096-token context Ollama is pinned to (TS-005), leaving room for
+# instructions, the question and the answer.
+DEFAULT_CHUNK_MAX_CHARS = 800
+DEFAULT_CONTEXT_TOKEN_BUDGET = 1500
+# BM25 score a chunk must exceed to count as evidence. 0 means "shares at least one
+# meaningful word with the question"; raise it to demand stronger matches.
+DEFAULT_SELECTION_MIN_SCORE = 0.0
 
 
 class ConfigError(Exception):
@@ -58,6 +67,10 @@ class Settings:
     corpus_max_file_bytes: int = DEFAULT_CORPUS_MAX_FILE_BYTES
     corpus_max_files: int = DEFAULT_CORPUS_MAX_FILES
     corpus_settle_seconds: float = DEFAULT_CORPUS_SETTLE_SECONDS
+    # Evidence selection (REQ-050, REQ-055).
+    chunk_max_chars: int = DEFAULT_CHUNK_MAX_CHARS
+    context_token_budget: int = DEFAULT_CONTEXT_TOKEN_BUDGET
+    selection_min_score: float = DEFAULT_SELECTION_MIN_SCORE
 
 
 def _require(environ: Mapping[str, str], name: str, problems: list[str]) -> str:
@@ -128,6 +141,17 @@ def _parse_seconds(name: str, raw: str, default: float, problems: list[str], all
     return default
 
 
+def _parse_non_negative_float(name: str, raw: str, default: float, problems: list[str]) -> float:
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if math.isfinite(value) and value >= 0:
+        return value
+    problems.append(f"{name} must be zero or a positive number")
+    return default
+
+
 def load_settings(environ: Mapping[str, str]) -> Settings:
     """Build Settings from an environment mapping, or raise ConfigError listing all problems.
 
@@ -178,6 +202,19 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
         else DEFAULT_CORPUS_SETTLE_SECONDS
     )
 
+    def optional_int(name: str, default: int) -> int:
+        raw = _optional(environ, name)
+        return _parse_positive_int(name, raw, default, problems) if raw else default
+
+    chunk_max_chars = optional_int("CHUNK_MAX_CHARS", DEFAULT_CHUNK_MAX_CHARS)
+    context_token_budget = optional_int("CONTEXT_TOKEN_BUDGET", DEFAULT_CONTEXT_TOKEN_BUDGET)
+    raw_min_score = _optional(environ, "SELECTION_MIN_SCORE")
+    min_score = (
+        _parse_non_negative_float("SELECTION_MIN_SCORE", raw_min_score, DEFAULT_SELECTION_MIN_SCORE, problems)
+        if raw_min_score
+        else DEFAULT_SELECTION_MIN_SCORE
+    )
+
     if problems:
         raise ConfigError(problems)
     return Settings(
@@ -190,6 +227,9 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
         corpus_max_file_bytes=max_file_bytes,
         corpus_max_files=max_files,
         corpus_settle_seconds=settle,
+        chunk_max_chars=chunk_max_chars,
+        context_token_budget=context_token_budget,
+        selection_min_score=min_score,
     )
 
 

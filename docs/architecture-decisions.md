@@ -4,7 +4,7 @@ Decision log required by brief §5.11 (REQ-110, REQ-112). Entries are appended *
 
 **Statuses**: `Proposed` (drafted, awaiting candidate acceptance) · `Accepted` · `Superseded` · `Rejected`.
 
-> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-002, ADR-005, ADR-011, ADR-012, ADR-013, ADR-014, ADR-015. Rejected: ADR-003.
+> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-002, ADR-005, ADR-007, ADR-011, ADR-012, ADR-013, ADR-014, ADR-015. Rejected: ADR-003.
 
 Template:
 
@@ -141,6 +141,8 @@ Template:
 - **Concurrency:** refresh is serialised with a lock and runs in a worker thread (blocking file I/O off the event loop). Each refresh publishes one immutable snapshot.
 - **Logging:** one summary line per refresh (counts, version, duration) and one line per skip (path and reason). `error` reasons log at WARNING, policy skips at DEBUG. Document content is never logged.
 
+**Amendment (2026-10-08, later the same day): per-file limit lowered to 50 MB.** After seeing the measured indexing cost (ADR-007), the candidate changed `CORPUS_MAX_FILE_BYTES` from 100 MB to **50 MB** (52,428,800 bytes). The 100 MB text above is kept as the original decision record.
+
 **Verified through the Docker Desktop for Mac bind mount (2026-10-08):** add, modify, same-size edit with restored mtime, atomic replace, rename and delete are each reflected on the next refresh. Stress test: 200/200 write-then-refresh cycles correct after the TS-004 fix. Host/VM clock skew measured at under 1 ms (TS-004).
 ---
 
@@ -171,7 +173,7 @@ Template:
 
 ## ADR-007: Lexical (BM25) evidence selection with an explicit, estimated token budget
 
-- **Status:** Proposed · **Date:** 2026-10-08
+- **Status:** Accepted by the candidate on 2026-10-08 (defaults: 800-char chunks, 1500-token evidence budget; Ollama context pinned to 4096, see TS-005) · **Date:** 2026-10-08
 - **Requirements:** REQ-050, REQ-051, REQ-053, REQ-055, REQ-071, REQ-075, REQ-083
 
 **Context.** Need a deliberate, explainable selection method and an explicit context-token budget; "a simple approach is acceptable when its limits are understood and documented" (§5.5).
@@ -192,6 +194,18 @@ Template:
 
 **Consequences.** + Simple, testable. − Misses synonyms/paraphrases; heuristic token count can be off for non-English text, so budget leaves a safety margin below the model's real context. Limits documented.
 
+
+**Implementation (2026-10-08).** `app/tokens.py`, `app/chunking.py`, `app/index.py`, `app/selection.py`.
+- **Chunk ID** = `<path>#<ordinal>:<sha256(chunk text)[:8]>`, e.g. `leave.md#0:139e712c`. The same content gives the same ID; any edit changes the hash, so a cited ID always pins the exact text the model saw.
+- **Chunking:** split on blank lines, pack paragraphs up to `CHUNK_MAX_CHARS`, cut long paragraphs at the last whitespace (hard cut only if there is none). No overlap.
+- **BM25:** k1=1.5, b=0.75 (standard, not configurable); Lucene's always-positive idf. English stop words are removed from the **question only**. Tokens = `\w+`, lower-cased. No stemming or synonyms.
+- **Relevance floor** `SELECTION_MIN_SCORE` (default 0, meaning at least one meaningful word in common). If nothing qualifies, selection returns `empty_corpus`, `no_meaningful_terms` or `no_relevant_evidence`, so the "insufficient evidence" answer can be given **without asking the model**.
+- **Budget fill:** rank order. A chunk that doesn't fit is dropped and the next is tried, so smaller chunks can use the space. The top chunk is truncated only if it alone exceeds the budget, and is marked `truncated`. The dropped count is always recorded, with the first 10 dropped IDs and scores listed.
+- **Index cache:** rebuilt only when the snapshot version changes. Per-document chunk statistics are cached by (path, sha256); the cache dict is replaced on rebuild, which evicts deleted documents.
+
+**Measured cost (2026-10-08, Intel i7-8850H).** A 19 MB file (28,000 chunks): read 0.10 s, index build **2.5 s**, selection 5 ms, peak memory **~630 MB**. Extrapolating linearly to the candidate's 100 MB per-file limit gives roughly **13 s** to index one such file and **~3 GB** of memory. The first request after such a file changes would wait for the rebuild. This is a known limitation, accepted with the 100 MB limit; lowering `CORPUS_MAX_FILE_BYTES` is the operational lever.
+
+**Amendment (2026-10-08): limit lowered to 50 MB** by the candidate in response to this measurement (see ADR-005 amendment). At 50 MB the same extrapolation gives roughly **6–7 s** to index one maximum-size file and **~1.6 GB** of memory. That's still a known limitation for the first request after such a file changes, but it is half the cost.
 ---
 
 ## ADR-008: OpenTelemetry tracing exported to a local Jaeger container; JSON logs to stdout
@@ -324,6 +338,7 @@ Template:
 - Option B: Ollama listens on `127.0.0.1:11434` by default. **Verified 2026-10-08:** the app container reaches it at `http://host.docker.internal:11434/v1` on Docker Desktop 4.94 for Mac (`/readyz` → 200 `ready` from inside Compose), with no change to Ollama's bind address. On native Linux, `host-gateway` maps to the Docker bridge, so Ollama there must listen on an address the bridge can reach (e.g. `OLLAMA_HOST=0.0.0.0`). That case is untested here and is a documented limitation.
 - − Option B: Compose cannot health-check or start the model server. Its state is visible only through the app's readiness signal and logs.
 - − Native Linux reviewers would need `extra_hosts: host.docker.internal:host-gateway` in Compose. To be documented in the platform notes (REQ-046 / REQ-106).
+- **Offline posture (decided 2026-10-08):** Ollama 0.35.1 had `OLLAMA_NO_CLOUD=0`, so its cloud features (remote inference, web search) were enabled. This app never uses them, but the candidate chose to disable them (`OLLAMA_NO_CLOUD=1` via `launchctl`) so the model server, like the app, has no internet-dependent features (REQ-012). This is documented in README "Ollama setup".
 - Follow-up: Ollama ships a default system prompt in the model (`You are Qwen…`). Our own `system` message replaces it per request; this needs verifying when prompt assembly is built (ADR-006).
 
 ---
@@ -376,6 +391,5 @@ Template:
 
 ## Pending decisions (to be recorded as ADRs when made)
 
-- Chunk size, overlap, relevance threshold, default budget values (ADR-007).
 - Tooling for REQ-121/122 (e.g. `ruff`, `mypy`, `pip-audit`, `bandit`, image scan) — choose when setting up the project skeleton.
 - Test strategy: fake OpenAI-compatible streaming server for deterministic tests.

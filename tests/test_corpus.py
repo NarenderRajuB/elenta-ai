@@ -84,7 +84,7 @@ class TestReq041Formats:
 
 
 # ---------------------------------------------------------------------------
-# Limits: per-file size (100 MB default) and file count (500 default)
+# Limits: per-file size (50 MB default) and file count (500 default)
 # ---------------------------------------------------------------------------
 
 class TestLimits:
@@ -124,7 +124,7 @@ class TestLimits:
 
     def test_edge_default_limits_from_config(self):
         from app.config import DEFAULT_CORPUS_MAX_FILE_BYTES, DEFAULT_CORPUS_MAX_FILES
-        assert DEFAULT_CORPUS_MAX_FILE_BYTES == 100 * MB
+        assert DEFAULT_CORPUS_MAX_FILE_BYTES == 50 * MB
         assert DEFAULT_CORPUS_MAX_FILES == 500
 
 

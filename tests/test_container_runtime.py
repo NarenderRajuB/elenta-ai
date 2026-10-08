@@ -149,7 +149,7 @@ def test_positive_host_files_visible_under_data(running):
 REFRESH_LOOP = (
     "import sys, json\n"
     "from app.corpus import Corpus\n"
-    "c = Corpus('/data', 100 * 1024 * 1024, 500, 0.0)\n"
+    "c = Corpus('/data', 50 * 1024 * 1024, 500, 0.0)\n"
     "for line in sys.stdin:\n"
     "    s = c.refresh()\n"
     "    print(json.dumps({d.rel_path: d.text for d in s.documents if d.rel_path.startswith(line.strip())}), flush=True)\n"

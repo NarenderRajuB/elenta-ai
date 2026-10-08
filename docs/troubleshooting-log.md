@@ -130,3 +130,31 @@ It passed 3 of 3 times on rerun, and a shell reproduction that slept 1 s between
 **Resolution.** The check is now `settle_seconds > 0 and now - mtime < settle_seconds`, so 0 truly disables the window. Regression test `test_edge_settle_zero_serves_even_with_slightly_future_mtime` added. After rebuilding: stress `{'ok': 200}`, container suite 15/15.
 
 **Remaining limitation.** With the default window (0.5 s), sub-millisecond skew only delays readiness by that skew, which is harmless. Larger skew (e.g. a VM clock drifting after laptop sleep) would delay readiness by the skew amount. It is never served early. This goes in the platform notes (REQ-046).
+
+---
+
+## TS-005: Pinning Ollama's context length; app restart cancelled
+
+- **Date:** 2026-10-08
+- **Phase:** Feature 5 (evidence selection), environment preparation
+- **Related:** REQ-055, REQ-071, REQ-012, ADR-007, ADR-013
+
+**Context.** ADR-013 flagged a silent-truncation risk: Ollama chooses its context window server-side. The candidate approved pinning it to 4096 tokens.
+
+**Findings.**
+- `ollama serve --help` (0.35.1) documents `OLLAMA_CONTEXT_LENGTH`: "Context length to use unless otherwise specified (default: 4k/32k/256k based on VRAM)". Without pinning, the window can differ between machines.
+- Ollama runs as the macOS app (`/Applications/Ollama.app`, server PID 694 started 2026-10-06). App-launched processes take their environment from `launchctl`, not the shell.
+- The server's environment also shows `OLLAMA_NO_CLOUD=0`, i.e. Ollama's cloud features (remote inference, web search) are enabled. They are not used by this app, but they matter for the offline claim (REQ-012).
+
+**Attempted actions.**
+1. `launchctl setenv OLLAMA_CONTEXT_LENGTH 4096`: succeeded (lasts until reboot).
+2. `osascript -e 'quit app "Ollama"'`: **failed** with `execution error: Ollama got an error: User cancelled. (-128)`. The app did not quit (same PID afterwards).
+3. `ollama ps` after loading the model shows `CONTEXT 4096`. This is Ollama's VRAM-based default on this machine, **not** the pin, because the server was not restarted.
+
+**Resolution / remaining limitation (first attempt).** Open. I didn't force-kill the candidate's app. The candidate needs to quit Ollama from the menu bar and reopen it; then check with `ollama ps` (expected `CONTEXT 4096`). Until then the effective context is 4096 by coincidence of defaults. The app-side evidence budget (1500 tokens) stays well inside it either way. Setup docs must give the persistent way to set this, since `launchctl setenv` is lost on reboot.
+
+**Resolution (2026-10-08, 21:24).** The candidate quit and reopened Ollama. Their first `ollama ps` showed an empty table. That's expected, not a failure: `ollama ps` lists only *loaded* models, and Ollama unloads a model after 5 minutes idle (`OLLAMA_KEEP_ALIVE` default). Verified afterwards:
+- New server process (PID 91114, started 21:24:14), and its environment contains `OLLAMA_CONTEXT_LENGTH=4096`.
+- After a one-token request to load the model, `ollama ps` shows `qwen2.5:0.5b … CONTEXT 4096`.
+
+Remaining: `launchctl setenv` doesn't survive a reboot (documented in README "Ollama setup"). `OLLAMA_NO_CLOUD=0` is still set; awaiting the candidate's decision.

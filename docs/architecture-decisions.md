@@ -4,7 +4,7 @@ Decision log required by brief §5.11 (REQ-110, REQ-112). Entries are appended *
 
 **Statuses**: `Proposed` (drafted, awaiting candidate acceptance) · `Accepted` · `Superseded` · `Rejected`.
 
-> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-002, ADR-011, ADR-013, ADR-014, ADR-015. Rejected: ADR-003.
+> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-002, ADR-011, ADR-012, ADR-013, ADR-014, ADR-015. Rejected: ADR-003.
 
 Template:
 
@@ -249,7 +249,7 @@ Template:
 
 ## ADR-012: Container security posture
 
-- **Status:** Proposed · **Date:** 2026-10-08
+- **Status:** Accepted by the candidate on 2026-10-08 · **Date:** 2026-10-08
 - **Requirements:** REQ-066, REQ-067, REQ-064, REQ-012
 
 **Decision.** Slim Python base image; app runs as a dedicated non-root UID; `./data:/data:ro`; no secrets baked into the image; only the app port (and trace UI port) published on localhost.
@@ -258,6 +258,16 @@ Template:
 
 **Consequences.** + Matches brief defaults with no justification needed. Follow-up: consider `read_only: true` root filesystem with a tmpfs if nothing needs to write.
 
+
+**Implementation (2026-10-08).** Implemented in `Dockerfile` and `compose.yaml`, including the follow-up above and three further hardening lines. Each is one line of Compose and needed nothing from the app:
+- Base image pinned by digest: `python:3.12-slim@sha256:05cda977…` (Python 3.12.15, amd64). A floating tag would make "works offline after the pull" unrepeatable.
+- Two-stage build. The builder installs `uv==0.11.24` from PyPI (avoiding a second base image) and runs `uv sync --frozen --no-dev`. Runtime holds only the virtualenv and `app/`, so `pytest`/`httpx2` are absent.
+- Runs as UID/GID 10001 (`app`). `read_only: true` root filesystem, with `tmpfs: /tmp` as the only writable path. `cap_drop: [ALL]` and `no-new-privileges:true`.
+- Port published as `127.0.0.1:8000:8000`, so it's reachable from this machine only. Inside the container `APP_HOST=0.0.0.0` is fixed, because network exposure is controlled by the host-side binding.
+- `.dockerignore` excludes `.env`, `data/`, `.git/`, `docs/` and `tests/`, so secrets and corpus documents never enter an image layer.
+- The Compose healthcheck targets `/healthz` (liveness) via Python's `urllib`, since the slim image has no curl.
+
+**Verified (2026-10-08):** image 194 MB; `id` → `uid=10001(app)`; `touch /data/x` and `touch /app/x` → `Read-only file system`; `/tmp` writable; `CapEff: 0000000000000000`; started with `--network none`, `/healthz` → 200. Encoded in `tests/test_container_config.py` and `tests/test_container_runtime.py`.
 ---
 
 ## ADR-013: Ollama (OpenAI-compatible endpoint) as backend, model `qwen2.5:0.5b` (Q4_K_M)
@@ -293,7 +303,7 @@ Template:
 - \+ Uses only the standard OpenAI-compatible contract, so behaviour is portable to DMR.
 - − **Silent context truncation risk:** Ollama decides the effective context window server-side, not per request through the OpenAI API. If our prompt exceeds it, the server may truncate without telling us. Mitigation: `CONTEXT_TOKEN_BUDGET` must stay well below the server's effective context, and docs must state that value. With Option B this is a host-side Ollama server setting (e.g. a context-length env var when starting `ollama serve`; exact variable to be verified and documented). Ties to REQ-055 and REQ-071.
 - − CPU-only inference on Intel. Latency to be measured and recorded.
-- − Option B: Ollama listens on `127.0.0.1:11434` by default. Reachability from the app container via `host.docker.internal` on Docker Desktop for Mac is **not yet verified**; check it when the inference client is built and log the result in the troubleshooting log.
+- Option B: Ollama listens on `127.0.0.1:11434` by default. **Verified 2026-10-08:** the app container reaches it at `http://host.docker.internal:11434/v1` on Docker Desktop 4.94 for Mac (`/readyz` → 200 `ready` from inside Compose), with no change to Ollama's bind address. On native Linux, `host-gateway` maps to the Docker bridge, so Ollama there must listen on an address the bridge can reach (e.g. `OLLAMA_HOST=0.0.0.0`). That case is untested here and is a documented limitation.
 - − Option B: Compose cannot health-check or start the model server. Its state is visible only through the app's readiness signal and logs.
 - − Native Linux reviewers would need `extra_hosts: host.docker.internal:host-gateway` in Compose. To be documented in the platform notes (REQ-046 / REQ-106).
 - Follow-up: Ollama ships a default system prompt in the model (`You are Qwen…`). Our own `system` message replaces it per request; this needs verifying when prompt assembly is built (ADR-006).

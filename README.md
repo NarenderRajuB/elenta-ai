@@ -27,13 +27,34 @@ The full operator guide (architecture, setup, configuration, operations, securit
 | Configuration | Environment variables only, read in one module, fail fast | ADR-011 |
 | Python tooling | `uv` with a committed `uv.lock` | ADR-014 |
 | Health signals | `/healthz` liveness, `/readyz` readiness (probes the model endpoint) | ADR-015 |
+| Container | Pinned slim base, non-root UID 10001, read-only root FS and `/data`, no capabilities, loopback-only port | ADR-012 |
 
 ## Prerequisites (so far)
 
 - [uv](https://docs.astral.sh/uv/) 0.11+ (it provides Python 3.12 from `.python-version`)
 - Ollama running on the host with `qwen2.5:0.5b` pulled (`ollama pull qwen2.5:0.5b`). Needed to see `/readyz` report *ready*. The automated tests do **not** need it.
 
-Internet is needed once, for `uv sync` and `ollama pull`. After that everything runs offline.
+- Docker Desktop (tested: 4.94, Compose v5.5.1) for the containerised run.
+
+Internet is needed once, for `uv sync`, `ollama pull` and the first `docker compose build`, which pulls the pinned `python:3.12-slim` base. After that everything runs offline.
+
+## Running with Docker Compose
+
+```bash
+cp .env.example .env          # first time only; adjust if needed
+docker compose build          # first time only (online: base image + dependencies)
+docker compose up -d          # the single startup command
+docker compose ps             # STATUS shows (healthy) once /healthz answers
+curl -i http://127.0.0.1:8000/readyz
+docker compose logs -f app
+docker compose down
+```
+
+- `LLM_URL` in `.env` uses `host.docker.internal`, which is how the container reaches Ollama on the host. This was verified on Docker Desktop for Mac (ADR-013).
+- Inside the container `APP_HOST`/`APP_PORT` are fixed to `0.0.0.0:8000`. The port is published on **host loopback only** (`127.0.0.1:8000`).
+- `./data` is mounted read-only at `/data`. Files added on the host are visible in the container immediately.
+- If `.env` is missing or incomplete, the container exits with code **2** and lists the missing variables (`docker compose logs app`).
+- The container health status reflects **liveness** only. Check `/readyz` for model availability.
 
 Docker / Compose prerequisites will be listed when the container feature lands.
 
@@ -78,13 +99,19 @@ uv sync            # create .venv from uv.lock (first time only)
 uv run pytest -v   # run all tests, one line per test
 ```
 
+Container tests build the image and start real containers (about 80 s, need Docker). They are excluded from the default run:
+
+```bash
+uv run pytest -m container -v
+```
+
 Run a single requirement's tests, for example:
 
 ```bash
 uv run pytest -v tests/test_config.py::TestReq016FailFast
 ```
 
-Current result: **102 passed, 0 warnings**. Dev-only dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
+Current result: **120 passed, 0 warnings** (default run) and **12 passed** (`-m container`). Dev-only dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
 
 ## Configuration
 
@@ -194,6 +221,32 @@ Code: `app/main.py`, `app/health.py`, `app/__main__.py` · Tests: `tests/test_he
 
 Manually verified against real Ollama on the host (2026-10-08): ready → 200; `LLM_MODEL=qwen2.5:7b-typo` → 503 `model_not_found`.
 
+### REQ-011 / REQ-040 / REQ-066 / REQ-067 / REQ-012: Containerised, read-only corpus, non-root, offline
+Code: `Dockerfile`, `compose.yaml`, `.dockerignore` · Tests: `tests/test_container_config.py` (static, default run), `tests/test_container_runtime.py` (`-m container`)
+
+| Type | Scenario | Expected | REQ |
+|---|---|---|---|
+| ✅ | `./data` bind-mounted at `/data` | Mount exists, `read_only: true` | 040, 067 |
+| ✅ | File created in `./data` on the host | Readable at `/data/…` in the running container | 040 |
+| ✅ | Container starts via Compose | Health status becomes `healthy` | 011 |
+| ✅ | `id -u` inside the container | `10001` (Dockerfile's last `USER` is numeric, non-zero) | 066 |
+| ✅ | Host Ollama with the model available | `/readyz` 200 from inside the container (skipped if Ollama is absent) | 011 |
+| ✅ | Image built from `uv.lock` | `uv sync --frozen --no-dev` | 012 |
+| ✅ | Hardening | `read_only`, `cap_drop: [ALL]`, `no-new-privileges` | 066 |
+| ❌ | Config missing (`LLM_URL=`, `LLM_MODEL=`) | Container exits 2, both named, no traceback | 016 |
+| ❌ | Write to `/data` or `/app` | `Read-only file system` | 067 |
+| ❌ | Model endpoint unreachable (dead port) | `/readyz` 503 `unreachable` | 017 |
+| ❌ | Port published on all host interfaces | Test fails: every port must bind `127.0.0.1` | — |
+| ❌ | Healthcheck uses `/readyz` | Test fails: must be liveness only (ADR-015) | 017 |
+| ❌ | `.env`, `data/`, `.git/` or `tests/` in build context | Test fails: listed in `.dockerignore` | 068 |
+| ❌ | Unpinned base image | Test fails: must be `@sha256:` digest | 012 |
+| ⚠️ | Compose rendered with empty `LLM_URL`/`LLM_MODEL` | Still valid; the app reports the problem | 016 |
+| ⚠️ | `/tmp` | Writable (tmpfs), the only writable path | 066 |
+| ⚠️ | Linux capabilities | `CapEff` all zeros | 066 |
+| ⚠️ | `pytest` / `httpx2` in image | Absent | 012 |
+| ⚠️ | Started with `--network none` | `/healthz` 200, `/readyz` 503 `unreachable`, so no internet is needed to start | 012 |
+| ⚠️ | Native Linux Docker | `host.docker.internal:host-gateway` alias present (not tested on Linux) | 046 |
+
 ### REQ-091: Every source file opens with a header comment block
 Tests: `tests/test_file_headers.py`
 
@@ -214,13 +267,19 @@ app/
   config.py          configuration boundary (REQ-013..016)
   health.py          model endpoint readiness probe (REQ-017)
   main.py            FastAPI app factory, /healthz and /readyz (REQ-017)
+data/                corpus, mounted read-only at /data (only .gitkeep so far)
 tests/
   test_config.py     config tests by requirement
+  test_container_config.py   static checks of compose.yaml / Dockerfile
+  test_container_runtime.py  real containers (-m container)
   test_health.py     health/readiness with a fake model endpoint
   test_entrypoint.py real subprocess: startup exit codes, live server
   test_file_headers.py
 docs/                spec, requirements, acceptance criteria, ADRs, troubleshooting log
 .env.example         configuration reference
+Dockerfile           two-stage image build (pinned base, non-root)
+compose.yaml         single-command startup
+.dockerignore        keeps .env, data/, tests/ out of the image
 pyproject.toml       project metadata, pytest settings
 uv.lock              pinned dependency versions
 ```

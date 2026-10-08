@@ -1,0 +1,47 @@
+# Compose definition for the ELENTA chat service (REQ-011; ADR-012, ADR-013).
+#
+# `docker compose up` starts the application. The model server (Ollama) runs natively
+# on the host and is a documented prerequisite (ADR-013); /readyz reports when it is
+# missing. Variables below are read from .env (copy .env.example).
+
+services:
+  app:
+    build: .
+    image: elenta-ai:local
+    environment:
+      # Required. Empty if .env is missing, so the app exits with code 2 and names them (REQ-016).
+      LLM_URL: ${LLM_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_HEALTH_TIMEOUT_SECONDS: ${LLM_HEALTH_TIMEOUT_SECONDS:-}
+      # Fixed inside the container: must listen on all interfaces for the published
+      # port to work, and the port must match the mapping below. Exposure to the
+      # network is controlled by the host-side 127.0.0.1 binding, not by APP_HOST.
+      APP_HOST: 0.0.0.0
+      APP_PORT: "8000"
+    ports:
+      # Published on host loopback only: reachable from this machine, not the LAN.
+      - "127.0.0.1:8000:8000"
+    volumes:
+      # Corpus mounted read-only; the app never writes to it (REQ-040, REQ-067).
+      - ./data:/data:ro
+    extra_hosts:
+      # Docker Desktop provides host.docker.internal already; this line makes the same
+      # LLM_URL work on native Linux Docker, where it does not exist by default.
+      - "host.docker.internal:host-gateway"
+    # Hardening (ADR-012): nothing in the app needs to write to its own filesystem,
+    # change privileges or use Linux capabilities.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # Liveness only (ADR-015): a model outage must not mark the app unhealthy.
+      # The slim image has no curl, so Python's standard library is used.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s

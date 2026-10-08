@@ -22,3 +22,7 @@ dev = [
 testpaths = ["tests"]
 # Lets tests import the app package from the repo root without installing it.
 pythonpath = ["."]
+# Container tests build the image and start containers (slow, need Docker).
+# Excluded by default; run them with: uv run pytest -m container
+markers = ["container: builds and runs the Docker image (slow; needs Docker)"]
+addopts = "-m 'not container'"

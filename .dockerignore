@@ -1,0 +1,12 @@
+# Keep the build context to what the image needs (Dockerfile copies only
+# pyproject.toml, uv.lock, .python-version and app/).
+# .env and data/ are excluded so secrets and corpus documents never enter an image layer.
+.env
+data/
+.git/
+.idea/
+.venv/
+docs/
+tests/
+**/__pycache__/
+.pytest_cache/

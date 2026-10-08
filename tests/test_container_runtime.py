@@ -21,7 +21,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 PROJECT = "elenta-pytest"
-VALID_ENV = {"LLM_URL": "http://host.docker.internal:11434/v1", "LLM_MODEL": "qwen2.5:0.5b"}
+VALID_ENV = {"LLM_URL": "http://host.docker.internal:11434/v1", "LLM_MODEL": "gemma3:1b"}
 
 pytestmark = [
     pytest.mark.container,
@@ -127,7 +127,7 @@ def test_positive_runs_as_non_root_uid_10001(running):
     assert _exec(running(), "id", "-u").stdout.strip() == "10001"
 
 
-@pytest.mark.skipif(not _host_ollama_has_model(), reason="host Ollama with qwen2.5:0.5b not available")
+@pytest.mark.skipif(not _host_ollama_has_model(), reason="host Ollama with gemma3:1b not available")
 def test_positive_ready_against_host_ollama(running):
     # Confirms the ADR-013 route: container -> host.docker.internal -> native Ollama.
     code, body = _get(running(), "/readyz")

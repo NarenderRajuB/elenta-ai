@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCE_FILES = sorted(p for d in ("app", "tests") for p in (ROOT / d).rglob("*.py"))
+SOURCE_FILES = sorted(p for d in ("app", "tests", "scripts") for p in (ROOT / d).rglob("*.py"))
 
 
 def has_header_comment(text: str) -> bool:

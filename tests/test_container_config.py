@@ -29,7 +29,7 @@ def _compose_config(**env_overrides: str) -> dict:
 
 @pytest.fixture(scope="module")
 def app_service() -> dict:
-    return _compose_config(LLM_URL="http://host.docker.internal:11434/v1", LLM_MODEL="qwen2.5:0.5b")
+    return _compose_config(LLM_URL="http://host.docker.internal:11434/v1", LLM_MODEL="gemma3:1b")
 
 
 # --- Positive --------------------------------------------------------------------
@@ -49,7 +49,7 @@ def test_positive_app_listens_on_all_interfaces_inside_container(app_service):
 
 def test_positive_required_config_passed_through(app_service):
     assert app_service["environment"]["LLM_URL"] == "http://host.docker.internal:11434/v1"
-    assert app_service["environment"]["LLM_MODEL"] == "qwen2.5:0.5b"
+    assert app_service["environment"]["LLM_MODEL"] == "gemma3:1b"
 
 
 def test_positive_hardening_flags(app_service):

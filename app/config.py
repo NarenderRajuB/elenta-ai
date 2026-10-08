@@ -44,6 +44,11 @@ DEFAULT_SELECTION_MIN_SCORE = 0.0
 # anything larger is rejected rather than silently truncated by the server (REQ-055).
 DEFAULT_LLM_CONTEXT_TOKENS = 4096
 DEFAULT_LLM_MAX_TOKENS = 512
+# Sampling temperature sent with every chat request. 0 makes answers as repeatable as
+# the server allows, so behaviour can be tested and demonstrated (TS-006). The upper
+# bound 2 is the range defined by the OpenAI-compatible API.
+DEFAULT_LLM_TEMPERATURE = 0.0
+MAX_LLM_TEMPERATURE = 2.0
 
 
 class ConfigError(Exception):
@@ -60,7 +65,7 @@ class Settings:
     # Base URL of any OpenAI-compatible endpoint, e.g. http://host.docker.internal:11434/v1.
     # The inference client appends /chat/completions, so no provider path is hard-coded (REQ-015, REQ-022).
     llm_url: str
-    # Model identifier passed verbatim to the endpoint, e.g. qwen2.5:0.5b.
+    # Model identifier passed verbatim to the endpoint, e.g. gemma3:1b.
     llm_model: str
     # Interface and port the HTTP server binds to.
     app_host: str = DEFAULT_APP_HOST
@@ -79,6 +84,7 @@ class Settings:
     # Context accounting (REQ-055, REQ-071).
     llm_context_tokens: int = DEFAULT_LLM_CONTEXT_TOKENS
     llm_max_tokens: int = DEFAULT_LLM_MAX_TOKENS
+    llm_temperature: float = DEFAULT_LLM_TEMPERATURE
 
 
 def _require(environ: Mapping[str, str], name: str, problems: list[str]) -> str:
@@ -225,6 +231,13 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
 
     llm_context_tokens = optional_int("LLM_CONTEXT_TOKENS", DEFAULT_LLM_CONTEXT_TOKENS)
     llm_max_tokens = optional_int("LLM_MAX_TOKENS", DEFAULT_LLM_MAX_TOKENS)
+    raw_temperature = _optional(environ, "LLM_TEMPERATURE")
+    llm_temperature = DEFAULT_LLM_TEMPERATURE
+    if raw_temperature:
+        llm_temperature = _parse_non_negative_float("LLM_TEMPERATURE", raw_temperature, DEFAULT_LLM_TEMPERATURE, problems)
+        if llm_temperature > MAX_LLM_TEMPERATURE:
+            problems.append(f"LLM_TEMPERATURE must be at most {MAX_LLM_TEMPERATURE:g}")
+            llm_temperature = DEFAULT_LLM_TEMPERATURE
     # Cross-field rule checked here because both values are plain numbers. Whether the
     # fixed prompt text also fits is checked at startup (app/__main__.py), because that
     # depends on the prompt module, not on configuration alone.
@@ -250,6 +263,7 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
         selection_min_score=min_score,
         llm_context_tokens=llm_context_tokens,
         llm_max_tokens=llm_max_tokens,
+        llm_temperature=llm_temperature,
     )
 
 

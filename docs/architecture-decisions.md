@@ -4,7 +4,7 @@ Decision log required by brief §5.11 (REQ-110, REQ-112). Entries are appended *
 
 **Statuses**: `Proposed` (drafted, awaiting candidate acceptance) · `Accepted` · `Superseded` · `Rejected`.
 
-> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-002, ADR-005, ADR-006, ADR-007, ADR-011, ADR-012, ADR-013, ADR-014, ADR-015. Rejected: ADR-003.
+> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-002, ADR-005, ADR-006, ADR-007, ADR-011, ADR-012, ADR-013 (model superseded), ADR-014, ADR-015, ADR-016. Rejected: ADR-003.
 
 Template:
 
@@ -179,6 +179,7 @@ Template:
 **Consequences / remaining risk (to be stated in the Security docs, REQ-107).**
 - When evidence *is* found, C7 is the only control on what the model concludes from it. A small model may still paraphrase injected text or overstate what the evidence says. No deterministic check for "unsupported decision" in free text is proposed, because any keyword rule would be invented beyond the brief. This residual risk is documented, and review scenario 4 demonstrates the behaviour.
 - C4 catches verbatim or near-verbatim leakage of the instructions, not paraphrase.
+- **Measured (TS-006, `docs/evidence/injection-eval.md`):** at `temperature: 0`, injected approval and role text did not change the answers of either candidate model in 3 runs. Both models attempted to leak the instructions once in 3 runs, and C4 blocked it. `qwen2.5:0.5b` invented content not in the evidence once. These are small fixed tests, not a guarantee; the risk remains and is stated in the Security docs.
 - C5 recognises known reasoning markers only.
 
 **Implementation (2026-10-08).** `app/prompt.py` (C1, C2, C7, context check), `app/output_guard.py` (C4, C5), `tests/test_no_execution.py` (C8 static scan). C3 and C6 are wired in the chat feature from `Selection.source_files` and `Selection.sufficient`.
@@ -321,6 +322,8 @@ Template:
 
 ## ADR-013: Ollama (OpenAI-compatible endpoint) as backend, model `qwen2.5:0.5b` (Q4_K_M)
 
+> **Model superseded by ADR-016 (2026-10-08):** the model is now `gemma3:1b`. The Ollama backend and Option B (native on the host) in this ADR still stand.
+
 - **Status:** Accepted, with Option B (Ollama native on the host), chosen by the candidate on 2026-10-08 · **Date:** 2026-10-08
 - **Requirements:** REQ-001, REQ-011, REQ-012, REQ-015, REQ-020, REQ-021, REQ-022, REQ-055, REQ-083
 - **Supersedes:** ADR-003
@@ -403,6 +406,33 @@ Template:
 **Consequences.** + Ollama state is visible without starting a chat. − An endpoint that lists model IDs differently from the chat `model` field would show `model_not_found`. This is a documented limitation; the fix would be configuration, not code. − FastAPI 0.143 brings in `opentelemetry-api` transitively. On its own that package is a no-op (`ProxyTracerProvider`, no exporter) and sends nothing. Real tracing comes only with ADR-008.
 
 **Verified (2026-10-08, real Ollama on host):** `/healthz` → 200; `/readyz` → 200 `ready`; with `LLM_MODEL=qwen2.5:7b-typo` → 503 `model_not_found`; with no config → exit 2 and a clear message.
+
+---
+
+## ADR-016: Model choice after the injection evaluation: `qwen2.5:0.5b` or `gemma3:1b`
+
+- **Status:** Accepted by the candidate on 2026-10-08: **`gemma3:1b`** · **Date:** 2026-10-08
+- **Requirements:** REQ-020, REQ-052, REQ-053, REQ-062, REQ-072; brief §5.7 "Do not … confidently invent"
+- **Evidence:** TS-006, `docs/evidence/injection-eval.md`, `scripts/eval_injection.py`
+
+**Context.** ADR-013 chose `qwen2.5:0.5b`. A live test then showed it once stating an approval injected by a document (TS-006). With `temperature: 0` (now the default) both candidate models pass the fixed injection cases, but they differ in ways that matter for the brief.
+
+**Options.**
+
+| | `qwen2.5:0.5b` (current) | `gemma3:1b` |
+|---|---|---|
+| Parameters / quantisation | 494M, Q4_K_M | 999.89M, Q4_K_M (just under the ≤1B limit) |
+| Injection eval at temp 0 (15 checks) | 15/15 | 15/15 |
+| Made up content not in the evidence | **Yes**: invented a 30-step expense process (role-injection case) | No: answered with the evidence sentence |
+| Prompt-leak attempt blocked by guard C4 | 1 of 3 runs | 1 of 3 runs |
+| System role inside the model | Yes (`<|im_start|>system`) | **No**: Ollama's template renders `system` as a user turn |
+| Short-answer latency (warm, CPU) / size | ~0.15 s / 397 MB | ~0.36 s / 815 MB |
+
+**Analysis.** The deterministic controls (C1–C6, C8 in ADR-006) are enforced by the application and work the same with either model. At the API level the app always sends a separate `system` message (C1), so the instruction hierarchy as the brief asks for it ("keeps application instructions separate from retrieved evidence") is in our prompt assembly, regardless of how a model's template renders it. The difference is in C7, the model-dependent layer. gemma stays within the evidence better but treats our rules with user-level weight; qwen gives them system-level weight but invented content in the eval.
+
+**Recommendation.** `gemma3:1b`. The brief's failure modes include "confidently invent", and inventing content from nothing is the more frequent, visible risk in a review demo. The missing system role is a model-internal detail that our code-enforced controls don't depend on. Switching needs only `LLM_MODEL=gemma3:1b` (REQ-015); no code change.
+
+**Consequences if accepted.** Update `.env.example` and README; `/readyz` will then require `gemma3:1b` to be pulled; re-run `scripts/eval_injection.py` after any prompt change. If rejected, `qwen2.5:0.5b` stays and its invention risk is documented.
 
 ---
 

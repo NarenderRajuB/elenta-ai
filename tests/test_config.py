@@ -348,3 +348,29 @@ class TestContextSettings:
     def test_edge_just_below_context_accepted(self):
         s = load_settings({**VALID, "LLM_CONTEXT_TOKENS": "1501", "LLM_MAX_TOKENS": "1500"})
         assert (s.llm_context_tokens, s.llm_max_tokens) == (1501, 1500)
+
+
+# ---------------------------------------------------------------------------
+# LLM_TEMPERATURE: TS-006 mitigation (repeatable answers); REQ-016 fail fast
+# ---------------------------------------------------------------------------
+
+class TestTemperatureSetting:
+    def test_positive_default_is_zero(self):
+        assert load_settings(VALID).llm_temperature == 0.0
+
+    @pytest.mark.parametrize("value, expected", [("0.7", 0.7), ("1", 1.0)])
+    def test_positive_override(self, value, expected):
+        assert load_settings({**VALID, "LLM_TEMPERATURE": value}).llm_temperature == expected
+
+    @pytest.mark.parametrize("value", ["-0.1", "abc", "nan", "inf"])
+    def test_negative_invalid(self, value):
+        with pytest.raises(ConfigError, match="LLM_TEMPERATURE must be zero or a positive number"):
+            load_settings({**VALID, "LLM_TEMPERATURE": value})
+
+    def test_negative_above_api_range(self):
+        with pytest.raises(ConfigError, match="LLM_TEMPERATURE must be at most 2"):
+            load_settings({**VALID, "LLM_TEMPERATURE": "2.5"})
+
+    @pytest.mark.parametrize("value, expected", [("2", 2.0), ("0", 0.0), ("  ", 0.0)])
+    def test_edge_bounds_and_blank(self, value, expected):
+        assert load_settings({**VALID, "LLM_TEMPERATURE": value}).llm_temperature == expected

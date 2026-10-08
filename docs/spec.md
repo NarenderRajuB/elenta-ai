@@ -128,7 +128,7 @@ These are flagged so they can be challenged. Each is resolved (or not) by an ADR
 | ID | Question | Why it matters | Proposed resolution |
 |---|---|---|---|
 | OQ-01 | Is Docker Model Runner available on the development/review machine (macOS, Docker Desktop version, Apple Silicon)? | Determines whether DMR or the Ollama fallback is the demo path. | **Resolved 2026-10-08: No.** The machine is an Intel Mac and DMR is Apple Silicon only. Using Ollama, as §5.2 permits. See TS-001, ADR-013. |
-| OQ-02 | Which exact ≤1B GGUF model tag? | Must be quantised, ≤1B, and must stream via `/chat/completions`. | **Resolved 2026-10-08:** `qwen2.5:0.5b` (494M params, Q4_K_M), verified streaming. See ADR-013. |
+| OQ-02 | Which exact ≤1B GGUF model tag? | Must be quantised, ≤1B, and must stream via `/chat/completions`. | **Resolved 2026-10-08:** first `qwen2.5:0.5b` (ADR-013); **changed the same day to `gemma3:1b`** (999.89M params, Q4_K_M) after the injection evaluation (TS-006, ADR-016). |
 | OQ-07 | Run Ollama as a Compose service, or natively on the host? | Affects whether a single `docker compose up` starts the *complete* system (REQ-011). | **Resolved 2026-10-08: natively on the host** (ADR-013 Option B). Ollama running is a documented prerequisite for `docker compose up`. |
 | OQ-03 | What "defensible precedence rule" for conflicts, if any? | §5.5 only requires surfacing when no rule resolves it. | Proposed: no automatic precedence rule; surface conflicts with sources. See ADR-009. |
 | OQ-04 | Which local trace viewer? | §5.8 + §7.9 require opening a trace during review. | See ADR-008 (OpenTelemetry → local Jaeger proposed). Adds one local image. |

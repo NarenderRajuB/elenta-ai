@@ -6,7 +6,7 @@
 
 import pytest
 
-from app.output_guard import LEAK_WINDOW, MAX_HOLD_BACK, OutputGuard
+from app.output_guard import LEAK_WINDOW, MAX_HOLD_BACK, ApprovalGuard, OutputGuard
 from app.prompt import (
     BLOCK_CLOSE,
     BLOCK_OPEN,
@@ -365,3 +365,104 @@ class TestGuardStreaming:
     def test_edge_short_answer_released_at_finish(self):
         text, _, _ = run_guard(["Yes."])
         assert text == "Yes."
+
+
+# ---------------------------------------------------------------------------
+# C9 / REQ-062: no manufactured approval (ADR-021, TS-017)
+# ---------------------------------------------------------------------------
+
+APPROVAL_Q = "Is my expense claim of 900 GBP approved?"
+
+
+def run_approval(question: str, pieces: list[str]) -> tuple[ApprovalGuard, list[str]]:
+    guard = ApprovalGuard(question)
+    released = [guard.feed(p) for p in pieces]
+    released.append(guard.finish())
+    return guard, released
+
+
+class TestC9ApprovalGuard:
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            "No.",
+            "No. [expenses.md#0:69939420]",
+            "Expense claims over 500 GBP require written approval from a director before submission.",
+            "The documents do not say whether your claim is approved.",
+            "It is not approved yet; a director must approve it in writing.",
+            "Your claim cannot be approved without a director's written approval.",
+        ],
+    )
+    def test_positive_safe_answers_pass_unchanged(self, answer):
+        guard, released = run_approval(APPROVAL_Q, [w + " " for w in answer.split()])
+        assert not guard.blocked and "".join(released).strip() == answer
+
+    def test_positive_streaming_stays_progressive(self):
+        # Only the last unfinished word is held back.
+        guard, released = run_approval("How many days of annual leave?", ["Employees ", "get ", "25 ", "days."])
+        assert not guard.blocked
+        assert [r for r in released if r] == ["Employees ", "get ", "25 ", "days."]
+
+    @pytest.mark.parametrize(
+        "pieces",
+        [
+            ["Yes", ".", " [expenses.md#0:69939420]"],  # the reproduced unsafe answer (TS-017)
+            ["Yes, your expense claim of 900 GBP is approved. The document states that claims ..."],  # qwen3:0.6b
+            ["Approved", "."],
+            ["Correct", ", it is fine."],
+            ["Your claim ", "is appro", "ved."],  # the key word split across pieces
+            ["The claim has been approved [expenses.md#0:1]"],  # no closing punctuation
+        ],
+    )
+    def test_negative_approval_affirmations_blocked_before_release(self, pieces):
+        guard, released = run_approval(APPROVAL_Q, pieces)
+        sent = "".join(released).lower()
+        assert guard.blocked
+        assert "yes" not in sent and "approved" not in sent and "correct" not in sent
+
+    def test_negative_safe_sentence_released_then_approval_blocked(self):
+        guard, released = run_approval(
+            APPROVAL_Q, ["Claims over 500 GBP need director approval. ", "Your claim is approved."]
+        )
+        assert guard.blocked and "".join(released) == "Claims over 500 GBP need director approval. "
+
+    def test_negative_states_approved_blocked_whatever_the_question(self):
+        guard, _ = run_approval("What is the expense process?", ["Every expense claim is approved."])
+        assert guard.blocked
+
+    @pytest.mark.parametrize(
+        "question, answer",
+        [
+            ("Is annual leave 25 days?", "Yes, 25 days."),  # yes/no question not about approval
+            ("Do staff work remotely?", "Correct, up to 2 days per week."),
+            (APPROVAL_Q, "Yesterday's policy requires director approval."),  # "yes" only inside a word
+        ],
+    )
+    def test_edge_affirmations_outside_approval_questions_pass(self, question, answer):
+        guard, released = run_approval(question, [answer])
+        assert not guard.blocked and "".join(released) == answer
+
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            "If the claim is approved, submit it to the finance department.",  # qwen2.5:0.5b, TS-017
+            "Once it has been approved, the director signs it.",
+            "Ask the director whether it is approved.",
+        ],
+    )
+    def test_edge_conditional_mentions_pass(self, answer):
+        guard, released = run_approval("What is the process for expense claims?", [answer])
+        assert not guard.blocked and "".join(released) == answer
+
+    def test_edge_affirmation_after_a_condition_still_blocked(self):
+        guard, _ = run_approval(APPROVAL_Q, ["It is approved, so if you want, submit it."])
+        assert guard.blocked
+
+    def test_edge_nothing_released_after_block(self):
+        guard = ApprovalGuard(APPROVAL_Q)
+        guard.feed("Yes.")
+        assert guard.blocked and guard.feed(" More text.") == "" and guard.finish() == ""
+
+    def test_edge_topic_detection_covers_authorisation(self):
+        guard, _ = run_approval("Has my trip been authorised?", ["Yes."])
+        assert guard.blocked

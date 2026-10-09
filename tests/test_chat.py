@@ -21,7 +21,7 @@ from app.corpus import Corpus
 from app.index import IndexCache
 from app.main import MAX_QUESTION_CHARS, create_app
 from app.observability import build_tracer_provider
-from app.output_guard import REFUSAL
+from app.output_guard import APPROVAL_REFUSAL, REFUSAL
 from app.prompt import SYSTEM_PROMPT
 
 LEAVE = "Employees receive 25 days of annual leave per calendar year."
@@ -258,6 +258,22 @@ class TestGuardOnLivePath:
         assert dict(events)["refusal"]["text"] == REFUSAL
         assert SYSTEM_PROMPT[100:160] not in answer_text(events)
         assert dict(events)["done"]["finish_reason"] == "instruction_leak_blocked"
+
+    def test_negative_unsupported_approval_replaced_by_fixed_reply(self, tmp_path):
+        # TS-017: a document's injected text made the model affirm an approval.
+        up = Upstream(lambda r: httpx.Response(200, content=sse_body("Yes", ", your claim", " is approved.")))
+        expenses = "Expense claims over 500 GBP require written approval from a director before submission."
+        _, events = ask(tmp_path, {"expenses.md": expenses}, "Is my expense claim of 900 GBP approved?", up)
+        assert dict(events)["refusal"]["text"] == APPROVAL_REFUSAL
+        assert "approved" not in answer_text(events).lower() and "yes" not in answer_text(events).lower()
+        assert dict(events)["done"]["finish_reason"] == "unsupported_approval_blocked"
+        assert dict(events)["sources"]["files"] == ["expenses.md"]  # sources still shown
+
+    def test_positive_honest_no_passes(self, tmp_path):
+        up = Upstream(lambda r: httpx.Response(200, content=sse_body("No", ".")))
+        expenses = "Expense claims over 500 GBP require written approval from a director before submission."
+        _, events = ask(tmp_path, {"expenses.md": expenses}, "Is my expense claim of 900 GBP approved?", up)
+        assert answer_text(events) == "No." and "refusal" not in names(events)
 
     def test_negative_reasoning_removed(self, tmp_path):
         up = Upstream(lambda r: httpx.Response(200, content=sse_body("<think>secret steps</think>", "25 days.")))

@@ -210,6 +210,18 @@ class TestSpanContent:
         attrs = spans["evidence.selection"].attributes
         assert list(attrs["selection.competing_files"]) == ["remote-2023.md", "remote-2024.md"]
 
+    def test_positive_approval_block_recorded_on_inference_span(self, tmp_path):
+        files = {"expenses.md": "Expense claims over 500 GBP require written approval from a director."}
+        spans, _, _ = run_chat(
+            tmp_path,
+            "Is my expense claim approved?",
+            lambda r: httpx.Response(200, content=sse("Yes.")),
+            files=files,
+        )
+        attrs = spans["inference.stream"].attributes
+        assert attrs["guard.approval_blocked"] is True and attrs["guard.leak_blocked"] is False
+        assert spans["chat.request"].attributes["chat.outcome"] == "unsupported_approval_blocked"
+
     def test_edge_corrupt_file_recorded_on_refresh_span(self, tmp_path):
         (tmp_path / "bad.txt").write_bytes(b"\xff\xfe")
         spans, _, _ = run_chat(tmp_path, "annual leave", lambda r: httpx.Response(200, content=sse("ok")))

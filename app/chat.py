@@ -43,7 +43,7 @@ from app.corpus import Corpus
 from app.index import IndexCache
 from app.inference import Finish, InferenceError, TextDelta, Usage, stream_chat
 from app.observability import REQUEST_ID, llm_backend_attributes
-from app.output_guard import REFUSAL, OutputGuard
+from app.output_guard import APPROVAL_REFUSAL, REFUSAL, ApprovalGuard, OutputGuard
 from app.prompt import QUOTABLE_RULES, PromptTooLarge, assemble
 from app.selection import select
 from app.tokens import METHOD as TOKEN_METHOD
@@ -271,6 +271,7 @@ async def answer(question: str, deps: ChatDeps) -> AsyncIterator[dict]:
         end(span)
 
         guard = OutputGuard(prompt.messages[0]["content"], QUOTABLE_RULES)
+        approval = ApprovalGuard(question)  # C9, on the text the leak/reasoning guard releases
         usage: Usage | None = None
         finish_reason = "unknown"
         emitted_chars = 0
@@ -298,9 +299,9 @@ async def answer(question: str, deps: ChatDeps) -> AsyncIterator[dict]:
                 request_timeout=s.llm_request_timeout_seconds,
             ):
                 if isinstance(item, TextDelta):
-                    released = guard.feed(item.text)
-                    if guard.blocked:
-                        break  # leaving the loop closes the upstream stream (ADR-006 C4)
+                    released = approval.feed(guard.feed(item.text))
+                    if guard.blocked or approval.blocked:
+                        break  # leaving the loop closes the upstream stream (ADR-006 C4, ADR-021)
                     if released:
                         if "first_token_ms" not in timings:
                             timings["first_token_ms"] = _ms(started_at)
@@ -321,13 +322,23 @@ async def answer(question: str, deps: ChatDeps) -> AsyncIterator[dict]:
             return
         timings["inference_ms"] = _ms(t)
 
+        tail = "" if guard.blocked or approval.blocked else approval.feed(guard.finish())
+        tail += "" if guard.blocked or approval.blocked else approval.finish()
         if guard.blocked:
             outcome = "instruction_leak_blocked"
             log.warning("output guard blocked instruction leak")
             yield {"event": "refusal", "data": {"text": REFUSAL}}
+        elif approval.blocked:
+            # The refusal replaces anything already shown; the sources stay visible.
+            outcome = "unsupported_approval_blocked"
+            log.warning("output guard blocked an unsupported approval")
+            yield {"event": "refusal", "data": {"text": APPROVAL_REFUSAL}}
         else:
-            tail = guard.finish()
             if tail:
+                # A short answer can be released only here (the last word is held, C9).
+                if "first_token_ms" not in timings:
+                    timings["first_token_ms"] = _ms(started_at)
+                    span.add_event("first_token")
                 emitted_chars += len(tail)
                 yield {"event": "token", "data": {"text": tail}}
             outcome = finish_reason
@@ -353,6 +364,7 @@ async def answer(question: str, deps: ChatDeps) -> AsyncIterator[dict]:
                 "llm.answer_chars": emitted_chars,
                 "guard.reasoning_blocks_removed": guard.events.reasoning_removed,
                 "guard.leak_blocked": guard.blocked,
+                "guard.approval_blocked": approval.blocked,
             }
         )
         end(span)

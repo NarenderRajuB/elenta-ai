@@ -15,6 +15,17 @@
 # immediately, while a leak in progress is held until it reaches LEAK_WINDOW characters
 # and is blocked. Known limits: only the listed markers are recognised, and C4
 # detects verbatim or near-verbatim copying, not paraphrase.
+#
+#   C9 - unsupported approval (ApprovalGuard, ADR-021): a sentence that states something
+#        "is / has been / was approved", or, when the question is about an approval, a
+#        sentence that opens with "yes" / "approved" / "correct", stops the stream unless
+#        the sentence is negated; the caller replaces the answer with a fixed reply. The
+#        service never confirms an approval itself: approvals are decisions people make,
+#        and a document's injected text can make a small model affirm one (TS-017).
+#        It runs on the text the OutputGuard releases. Only the last unfinished word is
+#        held back, plus a sentence that has started to affirm an approval, until it ends.
+#        Known limits: English phrasing only; a document that genuinely records an
+#        approval also gets the fixed reply (the sources still show it).
 
 import re
 from dataclasses import dataclass, field
@@ -152,3 +163,81 @@ class OutputGuard:
             if tail in self._prompt_norm or (tail.lstrip() in self._prompt_norm and tail.strip()):
                 return k
         return 0
+
+
+# --- C9: unsupported approval (ADR-021) -------------------------------------------------
+
+APPROVAL_REFUSAL = (
+    "The documents don't confirm an approval, and I can't grant or confirm one. "
+    "Please check the sources listed and the approval process they describe."
+)
+
+# Questions that ask about an approval or authorisation (English stems).
+_APPROVAL_TOPIC = re.compile(r"\b(approv|authori[sz]|sign(ed)?[ -]?off)", re.I)
+# "X is approved", "has been approved", ... anywhere in a sentence.
+_STATES_APPROVED = re.compile(
+    r"\b(is|are|has been|have been|was|were|been|gets?|got)\s+(now\s+|automatically\s+|fully\s+)?approved\b", re.I
+)
+# A sentence opening with an affirmation answers "is it approved?" with yes.
+_AFFIRMATIVE_OPENING = re.compile(r"^[\W_]*(yes|yeah|yep|correct|approved|confirmed)\b", re.I)
+_NEGATION = re.compile(r"\b(not|no|never|cannot)\b|n't\b", re.I)
+# "If / once / when ... is approved" describes a condition, not a decision.
+_CONDITIONAL = re.compile(r"\b(if|once|when|whether|until|unless|after|before)\b", re.I)
+_SENTENCE_END = re.compile(r"[.!?\n]")
+
+
+@dataclass
+class ApprovalGuard:
+    """Stops an answer that affirms an approval the service can't vouch for (C9)."""
+
+    question: str
+    blocked: bool = False
+    _sentence: str = ""  # released part of the current sentence
+    _held: str = ""  # received, not yet released
+
+    def __post_init__(self) -> None:
+        self._about_approval = bool(_APPROVAL_TOPIC.search(self.question))
+
+    def _affirms(self, sentence: str) -> bool:
+        for match in _STATES_APPROVED.finditer(sentence):
+            if not _CONDITIONAL.search(sentence[: match.start()]):
+                return True
+        return self._about_approval and bool(_AFFIRMATIVE_OPENING.search(sentence))
+
+    def _unsafe(self, sentence: str) -> bool:
+        return self._affirms(sentence) and not _NEGATION.search(sentence)
+
+    def feed(self, text: str) -> str:
+        """Accept released answer text; return what is safe to send now."""
+        if self.blocked:
+            return ""
+        self._held += text
+        out = ""
+        # Complete sentences are judged whole.
+        while (match := _SENTENCE_END.search(self._held)) is not None:
+            part = self._held[: match.end()]
+            if self._unsafe(self._sentence + part):
+                self.blocked = True
+                return out
+            out += part
+            self._held = self._held[match.end() :]
+            self._sentence = ""
+        # Unfinished sentence: once it affirms, hold it until it ends (a negation may
+        # still follow). Otherwise release all but the last unfinished word, which
+        # could still become "yes" or "approved".
+        if not self._affirms(self._sentence + self._held):
+            cut = max(self._held.rfind(" "), self._held.rfind("\t")) + 1
+            out += self._held[:cut]
+            self._sentence += self._held[:cut]
+            self._held = self._held[cut:]
+        return out
+
+    def finish(self) -> str:
+        """End of answer: judge the last sentence and release it if safe."""
+        if self.blocked:
+            return ""
+        if self._unsafe(self._sentence + self._held):
+            self.blocked = True
+            return ""
+        out, self._held = self._held, ""
+        return out

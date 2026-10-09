@@ -45,7 +45,7 @@ These are deliberate trade-offs or measured weaknesses, each recorded where it w
 - **Questions are limited to 8,000 characters**, and must also fit the model's context window with the evidence; a question that doesn't fit is rejected, never truncated (REQ-055).
 
 **Safety**
-- **Prompt injection is reduced, not eliminated.** Code-level controls stop documents from changing the role, removing sources, leaking the instructions or adding reasoning to the answer. The remaining risk is the model repeating an instruction-like claim (for example an "approval") in its own words; the evaluation measures it but cannot rule it out (ADR-006, TS-006).
+- **Prompt injection is reduced, not eliminated.** Code-level controls stop documents from changing the role, removing sources, leaking the instructions, adding reasoning or getting an approval confirmed (the service never confirms approvals, ADR-021). The remaining risk is the model repeating other instruction-like claims in its own words; the evaluation measures it but cannot rule it out, and results vary by model and hardware (ADR-006, TS-017).
 - **The instruction-leak guard catches verbatim or near-verbatim copying**, not paraphrase (ADR-006 C4).
 - Full list of controls and remaining risks: [Security](security.md).
 

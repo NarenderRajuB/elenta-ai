@@ -114,7 +114,7 @@ sequenceDiagram
 | 6 | Insufficient evidence | Empty corpus, no searchable words or no relevant chunk: a fixed reply, and **the model is not called** | ADR-006 C6 |
 | 7 | Assemble | System message (fixed instructions) → evidence blocks labelled with chunk ids, delimiters in document text neutralised → question. Rejected if it would exceed the context window minus the answer allowance. Span `prompt.assembly` | ADR-006 C1, C2 |
 | 8 | Infer | Streamed request to `LLM_URL` with temperature 0; three timeouts. Span `inference.stream` records model, backend, first-token time and token counts | ADR-002, ADR-013 |
-| 9 | Guard | Each piece passes the output guard: reasoning blocks removed; if the answer starts reproducing the system instructions, the stream stops and a refusal replaces it. Text is released as it arrives, so streaming stays progressive | ADR-006 C4, C5 |
+| 9 | Guard | Each piece passes the output guard: reasoning blocks removed; if the answer starts reproducing the system instructions, or affirms an approval, the stream stops and a fixed reply replaces it. Text is released as it arrives (only the last unfinished word is held), so streaming stays progressive | ADR-006 C4, C5, ADR-021 C9 |
 | 10 | Finish | `done` with finish reason, token counts (reported or estimated, labelled) and stage timings; or `error` with a fixed code and the request id | ADR-004 |
 
 **Event stream:** always exactly one terminal event, `done` or `error`.

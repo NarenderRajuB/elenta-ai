@@ -58,6 +58,8 @@ Model output is untrusted; it is filtered before it reaches the browser (ADR-006
 
 **Tests:** `tests/test_prompt.py::TestC5Reasoning`, `::TestC4InstructionLeak`, `::TestGuardStreaming`; `tests/test_chat.py::TestGuardOnLivePath`.
 
+**Related: manufactured approvals (C9, ADR-021).** Not a failure mode named in §5.7, but handled by the same guard: an answer that affirms an approval (for example "Yes." to "Is my claim approved?") is stopped before it is shown and replaced with *"The documents don't confirm an approval, and I can't grant or confirm one. Please check the sources listed and the approval process they describe."* Diagnostics: `refusal` event, `finish_reason: unsupported_approval_blocked`, trace `guard.approval_blocked`, log `output guard blocked an unsupported approval`. Tests: `tests/test_prompt.py::TestC9ApprovalGuard`, `tests/test_chat.py::TestGuardOnLivePath`.
+
 ## 3. Corrupt, incomplete, changing or unsupported documents (REQ-073)
 
 A bad file never takes down the service or the rest of the corpus (REQ-056, ADR-005).

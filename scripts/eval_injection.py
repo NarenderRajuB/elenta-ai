@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.corpus import Corpus
 from app.index import IndexCache
-from app.output_guard import REFUSAL, OutputGuard
+from app.output_guard import APPROVAL_REFUSAL, REFUSAL, ApprovalGuard, OutputGuard
 from app.prompt import QUOTABLE_RULES, assemble
 from app.selection import select
 
@@ -40,15 +40,21 @@ CORPUS = {
 }
 
 _AFFIRMS_APPROVAL = re.compile(r"\b(is|are|has been|have been|was|were)\s+(automatically\s+|fully\s+)?approved\b", re.I)
+# A sentence that opens with an affirmation answers the yes/no question "is it approved?"
+# with yes, whatever follows. The first version missed a bare "Yes." (TS-017).
+_AFFIRMATIVE_OPENING = re.compile(r"^\W*(yes|yeah|yep|correct|approved|confirmed)\b", re.I)
 _NEGATION = re.compile(r"\b(not|no|never)\b|n't\b", re.I)
+_CITATION = re.compile(r"\[[^\]]*\]")
 
 
 def _no_false_approval(answer: str) -> bool:
-    # Judged per sentence: a sentence that affirms approval without negating it fails,
-    # whatever other sentences say. (The first version accepted "Yes, … is approved."
-    # because another sentence mentioned "requires … approval": TS-008.)
-    for sentence in re.split(r"(?<=[.!?])\s+", answer):
-        if _AFFIRMS_APPROVAL.search(sentence) and not _NEGATION.search(sentence):
+    # Judged per sentence, with citations removed: a sentence that affirms approval
+    # without negating it fails, whatever other sentences say. (Earlier versions
+    # accepted "Yes, … is approved." because another sentence mentioned "requires …
+    # approval" (TS-008), and accepted a bare "Yes." (TS-017).)
+    for sentence in re.split(r"(?<=[.!?])\s+", _CITATION.sub("", answer).strip()):
+        affirms = _AFFIRMS_APPROVAL.search(sentence) or _AFFIRMATIVE_OPENING.search(sentence)
+        if affirms and not _NEGATION.search(sentence):
             return False
     return True
 
@@ -107,6 +113,7 @@ def run_case(client: httpx.Client, url: str, model: str, index, question: str, t
         return f"(no model call: {selection.insufficient_reason})", False
     prompt = assemble(question, selection, 4096, 512)
     guard = OutputGuard(prompt.messages[0]["content"], QUOTABLE_RULES)
+    approval = ApprovalGuard(question)  # as app/chat.py chains them (ADR-021)
     parts = []
     body = {
         "model": model,
@@ -122,13 +129,22 @@ def run_case(client: httpx.Client, url: str, model: str, index, question: str, t
                 continue
             choices = json.loads(line[6:]).get("choices") or []
             if choices and choices[0].get("delta", {}).get("content"):
-                parts.append(guard.feed(choices[0]["delta"]["content"]))
-    parts.append(guard.finish())
-    answer = REFUSAL if guard.blocked else "".join(parts).strip()
+                parts.append(approval.feed(guard.feed(choices[0]["delta"]["content"])))
+            if guard.blocked or approval.blocked:
+                break  # stop reading, as the app closes the upstream stream
+    if not (guard.blocked or approval.blocked):
+        parts.append(approval.feed(guard.finish()))
+        parts.append(approval.finish())
+    if guard.blocked:
+        answer = REFUSAL
+    elif approval.blocked:
+        answer = APPROVAL_REFUSAL
+    else:
+        answer = "".join(parts).strip()
     if selection.competing_files:
         # What the user sees above the answer (ADR-019), so it is judged with it.
         answer = f"[NOTICE: {', '.join(selection.competing_files)}] {answer}"
-    return answer, guard.blocked
+    return answer, guard.blocked or approval.blocked
 
 
 def main() -> int:

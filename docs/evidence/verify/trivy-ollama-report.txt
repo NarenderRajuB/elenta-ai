@@ -1,12 +1,12 @@
-$ docker run --rm -v /var/folders/r0/d_cqdn6n6n72h2gpccr7vkfh0000gn/T/tmp.OCv3MXkTGA:/scan:ro -v elenta-trivy-cache:/root/.cache/trivy aquasec/trivy@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa image --input /scan/ollama.tar --scanners vuln --no-progress
-# 2026-10-09T10:50:51Z
+$ docker run --rm -v /var/folders/r0/d_cqdn6n6n72h2gpccr7vkfh0000gn/T/tmp.KWCDxtfW4u:/scan:ro -v elenta-trivy-cache:/root/.cache/trivy aquasec/trivy@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa image --input /scan/ollama.tar --scanners vuln --no-progress
+# 2026-10-09T11:42:08Z
 
-2026-10-09T10:50:52Z	INFO	[vuln] Vulnerability scanning is enabled
-2026-10-09T10:51:06Z	INFO	Detected OS	family="ubuntu" version="24.04"
-2026-10-09T10:51:06Z	INFO	[ubuntu] Detecting vulnerabilities...	os_version="24.04" pkg_num=123
-2026-10-09T10:51:06Z	INFO	Number of language-specific files	num=1
-2026-10-09T10:51:06Z	INFO	[gobinary] Detecting vulnerabilities...
-2026-10-09T10:51:06Z	WARN	Using severities from other vendors for some vulnerabilities. Read https://trivy.dev/docs/v0.75/guide/scanner/vulnerability#severity-selection for details.
+2026-10-09T11:42:09Z	INFO	[vuln] Vulnerability scanning is enabled
+2026-10-09T11:42:26Z	INFO	Detected OS	family="ubuntu" version="24.04"
+2026-10-09T11:42:26Z	INFO	[ubuntu] Detecting vulnerabilities...	os_version="24.04" pkg_num=123
+2026-10-09T11:42:26Z	INFO	Number of language-specific files	num=1
+2026-10-09T11:42:26Z	INFO	[gobinary] Detecting vulnerabilities...
+2026-10-09T11:42:26Z	WARN	Using severities from other vendors for some vulnerabilities. Read https://trivy.dev/docs/v0.75/guide/scanner/vulnerability#severity-selection for details.
 
 Report Summary
 

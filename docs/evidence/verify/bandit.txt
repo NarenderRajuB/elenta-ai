@@ -1,5 +1,5 @@
 $ uv run bandit -c pyproject.toml -r app scripts
-# 2026-10-09T10:46:40Z
+# 2026-10-09T11:37:54Z
 
 [main]	INFO	profile include tests: None
 [main]	INFO	profile exclude tests: None
@@ -7,13 +7,13 @@ $ uv run bandit -c pyproject.toml -r app scripts
 [main]	INFO	cli exclude tests: None
 [main]	INFO	using config: pyproject.toml
 [main]	INFO	running on Python 3.12.6
-Run started:2026-10-09 10:46:41.071863+00:00
+Run started:2026-10-09 11:37:54.853660+00:00
 
 Test results:
 	No issues identified.
 
 Code scanned:
-	Total lines of code: 1729
+	Total lines of code: 1781
 	Total lines skipped (#nosec): 0
 	Total potential issues skipped due to specifically being disabled (e.g., #nosec BXXX): 0
 

@@ -31,7 +31,7 @@ The corpus can be far larger than the model's 4,096-token window; only a bounded
 
 **Diagnostics**
 - `sources` event: `budget_tokens`, `used_tokens`, `dropped_chunks`, `truncated`, and per chunk `estimated_tokens` and `truncated`.
-- Trace `evidence.selection`: the same counts and the selected chunk ids (dropped chunks are counted, not listed individually). `prompt.assembly`: `prompt.estimated_tokens` and `prompt.limit_tokens`; `error.code: question_too_long` when rejected.
+- Trace `evidence.selection`: the same counts, the selected chunk ids, and the first 10 dropped chunk ids with their scores, in rank order (`selection.dropped_chunk_ids`, `selection.dropped_scores`). `prompt.assembly`: `prompt.estimated_tokens` and `prompt.limit_tokens`; `error.code: question_too_long` when rejected.
 
 **Limitation:** token counts before the model call are estimates (characters ÷ 4). They undercount for some scripts (for example Chinese or Japanese); the 1,500-token budget inside 4,096 leaves margin for that. When the model reports real counts, `done` shows both.
 

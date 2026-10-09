@@ -29,6 +29,7 @@ from app.observability import (
     configure_logging,
     llm_backend_attributes,
 )
+from app.selection import DROPPED_DETAIL_LIMIT
 
 SECRET_DOC = "Employees receive 25 days of annual leave. CONFIDENTIAL-DOC-MARKER-7731"
 SECRET_QUESTION = "annual leave QUESTION-MARKER-4410"
@@ -43,7 +44,7 @@ def sse(*texts, usage=(200, 5)):
     return (out + "data: [DONE]\n\n").encode()
 
 
-def run_chat(tmp_path: Path, question: str, respond, files=None, llm_url="http://llm.test/v1"):
+def run_chat(tmp_path: Path, question: str, respond, files=None, llm_url="http://llm.test/v1", extra_env=None):
     for name, text in (files if files is not None else {"leave.md": SECRET_DOC}).items():
         (tmp_path / name).write_text(text, encoding="utf-8")
     settings = load_settings(
@@ -52,6 +53,7 @@ def run_chat(tmp_path: Path, question: str, respond, files=None, llm_url="http:/
             "LLM_MODEL": "gemma3:1b",
             "CORPUS_DIR": str(tmp_path),
             "CORPUS_SETTLE_SECONDS": "0",
+            **(extra_env or {}),
         }
     )
     exporter = InMemorySpanExporter()
@@ -157,6 +159,45 @@ class TestSpanContent:
         dump = repr([(s.name, dict(s.attributes), [e.attributes for e in s.events]) for s in all_spans])
         assert "CONFIDENTIAL-DOC-MARKER" not in dump and "QUESTION-MARKER" not in dump
         assert "You are a document question-answering assistant" not in dump
+
+    def test_positive_dropped_chunks_listed_in_rank_order_with_scores(self, tmp_path):
+        # Small chunks and budget: one chunk fits, the other two are dropped.
+        spans, events, all_spans = run_chat(
+            tmp_path,
+            "annual leave",
+            lambda r: httpx.Response(200, content=sse("ok")),
+            files={"a.md": "annual leave annual leave", "b.md": "annual leave days", "c.md": "leave rules apply here"},
+            extra_env={"CONTEXT_TOKEN_BUDGET": "7"},
+        )
+        attrs = spans["evidence.selection"].attributes
+        ids, scores = list(attrs["selection.dropped_chunk_ids"]), list(attrs["selection.dropped_scores"])
+        assert attrs["selection.dropped_chunks"] == len(ids) == len(scores) == 2
+        assert events["sources"]["dropped_chunks"] == 2
+        assert not set(ids) & set(attrs["selection.chunk_ids"])  # dropped are not also selected
+        assert scores == sorted(scores, reverse=True)
+        assert {i.split("#")[0] for i in ids} <= {"a.md", "b.md", "c.md"}
+        assert "rules apply here" not in _dump(all_spans)  # ids and scores only, no text
+
+    def test_negative_nothing_dropped_gives_empty_lists(self, tmp_path):
+        spans, _, _ = run_chat(tmp_path, "annual leave", lambda r: httpx.Response(200, content=sse("ok")))
+        attrs = spans["evidence.selection"].attributes
+        assert attrs["selection.dropped_chunks"] == 0
+        assert list(attrs["selection.dropped_chunk_ids"]) == [] and list(attrs["selection.dropped_scores"]) == []
+
+    def test_edge_more_dropped_than_the_limit_lists_only_the_first(self, tmp_path):
+        files = {f"f{i:02}.md": f"annual leave note {i}" for i in range(DROPPED_DETAIL_LIMIT + 5)}
+        spans, _, _ = run_chat(
+            tmp_path,
+            "annual leave",
+            lambda r: httpx.Response(200, content=sse("ok")),
+            files=files,
+            extra_env={"CONTEXT_TOKEN_BUDGET": "6"},
+        )
+        attrs = spans["evidence.selection"].attributes
+        assert attrs["selection.dropped_chunks"] == DROPPED_DETAIL_LIMIT + 4  # all but the one selected
+        assert (
+            len(attrs["selection.dropped_chunk_ids"]) == len(attrs["selection.dropped_scores"]) == DROPPED_DETAIL_LIMIT
+        )
 
     def test_edge_corrupt_file_recorded_on_refresh_span(self, tmp_path):
         (tmp_path / "bad.txt").write_bytes(b"\xff\xfe")

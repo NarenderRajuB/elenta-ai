@@ -158,6 +158,11 @@ async def answer(question: str, deps: ChatDeps) -> AsyncIterator[dict]:
                 "selection.budget_tokens": selection.budget_tokens,
                 "selection.used_tokens": selection.used_tokens,
                 "selection.dropped_chunks": selection.dropped_count,
+                # The first DROPPED_DETAIL_LIMIT dropped chunks in rank order, as two
+                # parallel lists (span attributes can't hold objects). Ids and scores
+                # only, never chunk text (REQ-084).
+                "selection.dropped_chunk_ids": [d.chunk_id for d in selection.dropped_top],
+                "selection.dropped_scores": [d.score for d in selection.dropped_top],
                 "selection.truncated": selection.truncated,
                 "selection.token_count_method": TOKEN_METHOD,
                 "selection.insufficient_reason": selection.insufficient_reason or "",

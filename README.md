@@ -106,7 +106,7 @@ Each chat request is **one trace**:
 |---|---|
 | `chat.request` (root) | request id, `http.route` and `http.request.method`, outcome (`stop`, `insufficient_evidence`, an error code, or `client_disconnected`), model called, total ms (end-to-end request latency); `error.type` (exception class only) on an unexpected error |
 | `corpus.refresh` | corpus version, documents, added/modified/removed/unchanged, skipped files with reason |
-| `evidence.selection` | selected chunk ids and files, candidates, budget, used and dropped tokens, truncation, insufficient reason |
+| `evidence.selection` | selected chunk ids and files, candidates, budget, used tokens, dropped count plus the first 10 dropped chunk ids and scores, truncation, insufficient reason |
 | `prompt.assembly` | estimated prompt tokens and the limit, number of evidence chunks |
 | `inference.stream` | model, backend (`llm.backend`: `ollama`, `docker-model-runner` or `openai-compatible`, derived from `LLM_URL`), `server.address` and `server.port`, temperature, max tokens, first-token time, prompt/completion tokens with source (`reported` or `estimated (chars/4)`), finish reason, guard results; error code on failure |
 
@@ -226,7 +226,7 @@ Run a single requirement's tests, for example:
 uv run pytest -v tests/test_config.py::TestReq016FailFast
 ```
 
-Current result: **544 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Test-only dev dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The other dev tools are listed below. The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
+Current result: **547 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Test-only dev dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The other dev tools are listed below. The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
 
 ## Code quality and security checks (REQ-120..123)
 
@@ -828,6 +828,9 @@ Tests: `tests/test_observability.py::TestSpanContent`
 | ✅ | Selected chunks | `selection.chunk_ids` equal the `sources` event |
 | ✅ | Every span | Has a duration |
 | ❌ | Marker strings in the question and document | Appear in no span attribute or event |
+| ✅ | Evidence over budget | Dropped chunk ids and scores listed in rank order, count matches the `sources` event, no chunk text |
+| ❌ | Nothing dropped | Both dropped lists empty |
+| ⚠️ | More than 10 dropped | Full count recorded, first 10 listed |
 | ⚠️ | Corrupt file | Listed on `corpus.refresh` as `bad.txt:not_utf8` |
 
 ### Failure paths in traces (REQ-076 / REQ-033)

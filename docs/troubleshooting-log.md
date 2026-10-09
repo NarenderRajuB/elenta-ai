@@ -308,3 +308,17 @@ Exposure was limited (local development viewer; UI on `127.0.0.1` only; OTLP por
 3. Verified live: `CONTEXT_TOKEN_BUDGET=1234 LLM_TEMPERATURE=0.2 docker compose up` gave those values inside the container, and the app started.
 
 **Impact.** The development `.env` set none of the affected variables, so earlier live checks and the injection evaluation ran with the intended defaults.
+
+---
+
+## TS-012: Dropped chunk ids collected but never recorded
+
+- **Date:** 2026-10-09
+- **Phase:** Writing the failure-handling guide (REQ-108), checking claims against the code
+- **Related:** REQ-055, REQ-083, REQ-084, ADR-007
+
+**Symptom.** ADR-007 states that "the first 10 dropped IDs and scores [are] listed", but no trace attribute, event field or log line contained them. Only the dropped count was visible.
+
+**Diagnosis.** `app/selection.py` builds `Selection.dropped_top` (up to `DROPPED_DETAIL_LIMIT` = 10 chunks with id, score and estimated tokens) and a unit test checks its length, but `app/chat.py` only copied `dropped_count` onto the `evidence.selection` span and the `sources` event. Nothing failed, so the gap went unnoticed until the documentation was checked line by line.
+
+**Resolution.** The `evidence.selection` span now records `selection.dropped_chunk_ids` and `selection.dropped_scores`, two parallel lists in rank order (span attributes can't hold objects). Ids and scores only, never chunk text. New tests in `tests/test_observability.py::TestSpanContent` cover two dropped chunks (rank order, no overlap with the selected ids, no text), nothing dropped (empty lists) and more than 10 dropped (count kept, 10 listed); all three failed before the change. The `sources` event still carries only the count, which is what the browser shows.

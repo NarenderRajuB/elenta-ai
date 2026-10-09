@@ -1,4 +1,4 @@
-B# Requirements Register
+# Requirements Register
 
 Source of truth: `ELENTA_Candidate_Assesment.pdf` (ELN-TA-BTR-003). Every requirement below cites the brief section it comes from. Nothing here is invented; where the brief uses "preferred" or "may", the level is **SHOULD** or **MAY** rather than **MUST**.
 

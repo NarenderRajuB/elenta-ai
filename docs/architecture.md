@@ -9,7 +9,6 @@ flowchart LR
     subgraph host["Host machine (macOS, Docker Desktop)"]
         browser["Browser<br/>UI at 127.0.0.1:8000<br/>Jaeger UI at 127.0.0.1:16686"]
         data[("./data<br/>.txt / .md files")]
-        ollama["Ollama (native)<br/>gemma3:1b, Q4_K_M<br/>:11434, OpenAI-compatible /v1"]
 
         subgraph compose["Docker Compose"]
             subgraph app["app container: elenta-ai:local<br/>UID 10001, read-only root fs, no capabilities"]
@@ -18,6 +17,8 @@ flowchart LR
                 mem[("In memory<br/>corpus snapshot + BM25 index")]
             end
             jaeger["jaeger container<br/>jaeger:2.22.0, traces in memory"]
+            ollama["ollama container (profile: ollama)<br/>ollama:0.40.1, gemma3:1b Q4_K_M<br/>:11434, no published port, no capabilities"]
+            models[("ollama-models volume")]
         end
     end
 
@@ -25,12 +26,13 @@ flowchart LR
     api --> pipeline
     pipeline <--> mem
     data -- "bind mount, read-only<br/>at /data" --> pipeline
-    pipeline -- "HTTP: POST /v1/chat/completions (stream)<br/>GET /v1/models (readiness)<br/>via host.docker.internal:11434" --> ollama
+    pipeline -- "HTTP: POST /v1/chat/completions (stream)<br/>GET /v1/models (readiness)<br/>ollama:11434 (Compose network only)" --> ollama
+    ollama <--> models
     pipeline -- "OTLP/HTTP :4318<br/>(Compose network only)" --> jaeger
     browser -. "trace lookup by request id" .-> jaeger
 ```
 
-Published ports are bound to `127.0.0.1` only: `8000` (app) and `16686` (Jaeger UI). Jaeger's OTLP port `4318` is reachable only from inside the Compose network. JSON logs go to the app container's stderr (`docker compose logs app`).
+This is the Intel Mac setup (ADR-020), where Docker Model Runner is unavailable. Published ports are bound to `127.0.0.1` only: `8000` (app) and `16686` (Jaeger UI). Jaeger's OTLP port `4318` and Ollama's `11434` are reachable only from inside the Compose network. With Docker Model Runner or a natively installed Ollama, the `ollama` container isn't started and `LLM_URL` points at that server instead. JSON logs go to the app container's stderr (`docker compose logs app`).
 
 ## Components
 
@@ -38,11 +40,11 @@ Published ports are bound to `127.0.0.1` only: `8000` (app) and `16686` (Jaeger 
 |---|---|---|---|
 | **App** | Python 3.12, FastAPI + Uvicorn, in image `elenta-ai:local` (two-stage build from `uv.lock`; runtime stage has no `pip`) | `docker compose up` | ADR-001, ADR-012, ADR-014 |
 | **Browser UI** | Three static files (`app/static/`), served by the app; plain text rendering only | Served at `/` | ADR-010 |
-| **Model server** | Ollama on the host, model `gemma3:1b` (999.89M parameters, Q4_K_M), context pinned to 4096 tokens | The user (a prerequisite) | ADR-013, ADR-016, TS-005 |
+| **Model server** | Ollama 0.40.1 in its own container (pinned by digest), model `gemma3:1b` (999.89M parameters, Q4_K_M) in the `ollama-models` volume, context pinned to 4096 tokens, cloud features off | `docker compose up`, via the `ollama` profile in `.env` | ADR-016, ADR-020, TS-005 |
 | **Trace viewer** | Jaeger 2.22.0 (single binary with UI and collector), pinned by digest, in-memory storage | `docker compose up` | ADR-008, TS-010 |
 | **Corpus** | Host `./data`, mounted read-only at `/data` | Bind mount | ADR-005, ADR-012 |
 
-**Why the model runs outside Compose.** Docker Model Runner, the brief's preferred backend, is not available on the development machine (TS-001). Ollama runs natively on the host rather than as a Compose service, reusing the model already pulled there (ADR-013, option B). The cost is that `docker compose up` does not start the model server; `/readyz` reports when it is missing. The app does not depend on which server it is: it uses only the standard OpenAI-compatible API, configured by `LLM_URL` and `LLM_MODEL` (REQ-015, REQ-022). The trace records which backend served each request (`llm.backend`).
+**Why Ollama runs in Compose, behind a profile.** Docker Model Runner, the brief's preferred backend, is not available on the development machine, an Intel Mac (TS-001). Running Ollama as a Compose service means a single `docker compose up` starts the complete system (REQ-011). It sits in the `ollama` profile, enabled by `COMPOSE_PROFILES=ollama` in `.env`, so a machine with Docker Model Runner doesn't start a second model server (ADR-020). The app does not depend on which server it is: it uses only the standard OpenAI-compatible API, configured by `LLM_URL` and `LLM_MODEL` (REQ-015, REQ-022). The trace records which backend served each request (`llm.backend`).
 
 ## Boundaries inside the app
 
@@ -73,6 +75,7 @@ There is **no database and nothing is written to disk** by the app (its root fil
 | Documents | Host `./data`, read-only in the container | Owned by the user |
 | Corpus snapshot (text of every served file) | App memory | Replaced on each refresh; lost on restart and rebuilt on the first question |
 | BM25 index and chunk cache | App memory | Rebuilt when the snapshot changes; entries for deleted files are dropped |
+| Model files | `ollama-models` Docker volume (Ollama container) | Kept across restarts and `docker compose down`; removed only with `docker compose down -v` or `docker volume rm` |
 | Traces | Jaeger memory | Lost when the Jaeger container restarts |
 | Logs | Container stderr, kept by Docker | Until the container is removed |
 
@@ -83,10 +86,10 @@ Because state is rebuilt from `./data` on demand, a restart needs no recovery st
 | Aspect | How it works |
 |---|---|
 | Protocol | OpenAI-compatible HTTP: `POST {LLM_URL}/chat/completions` with `stream: true`; `GET {LLM_URL}/models` for readiness |
-| Address | `LLM_URL=http://host.docker.internal:11434/v1`. Docker Desktop provides `host.docker.internal`; Compose adds it for native Linux (`host-gateway`) |
+| Address | `LLM_URL=http://ollama:11434/v1`, the `ollama` service on the Compose network. Alternatives: `http://model-runner.docker.internal/engines/v1` (Docker Model Runner) or `http://host.docker.internal:11434/v1` (Ollama on the host; Compose maps that name on native Linux with `host-gateway`) |
 | Request | Standard fields only: `model`, `messages`, `stream`, `max_tokens`, `temperature` (0), `stream_options.include_usage` |
 | Client | One shared `httpx.AsyncClient`, created and closed with the app |
 | Timeouts | Connect 5 s, gap between streamed pieces 60 s, whole call 180 s (configurable) |
 | Cancellation | If the browser disconnects or presses Stop, the upstream response is closed and the model stops generating (REQ-033) |
 | Failures | Each becomes a fixed code: `model_unavailable`, `model_timeout`, `model_http_error`, `model_stream_failed`, shown to the user with the request id |
-| Switching backend | Change `LLM_URL` and `LLM_MODEL` in `.env`; no code change. Docker Model Runner would be `http://model-runner.docker.internal/engines/v1` |
+| Switching backend | Change `LLM_URL` and `LLM_MODEL` in `.env`, and remove `COMPOSE_PROFILES` when not using the Compose Ollama; no code change ([Setup](setup.md#other-platforms)) |

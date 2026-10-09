@@ -1,8 +1,11 @@
-# Compose definition for the ELENTA chat service (REQ-011; ADR-012, ADR-013).
+# Compose definition for the ELENTA chat service (REQ-011; ADR-012, ADR-020).
 #
-# `docker compose up` starts the application. The model server (Ollama) runs natively
-# on the host and is a documented prerequisite (ADR-013); /readyz reports when it is
-# missing. Variables below are read from .env (copy .env.example).
+# `docker compose up` starts the app and the Jaeger trace viewer. The model server
+# depends on the machine (ADR-020):
+#   - Intel Mac (Docker Model Runner unavailable): the `ollama` service below, enabled by
+#     COMPOSE_PROFILES=ollama in .env, so the one command starts the whole system.
+#   - Docker Model Runner, or Ollama native on the host: no profile; LLM_URL points at it.
+# Variables below are read from .env (copy .env.example).
 
 services:
   app:
@@ -57,7 +60,13 @@ services:
     security_opt:
       - no-new-privileges:true
     depends_on:
-      - jaeger
+      jaeger:
+        condition: service_started
+      # Only when the `ollama` profile is enabled; otherwise ignored (required: false).
+      # Waiting for "healthy" means the app's first readiness check finds the server up.
+      ollama:
+        condition: service_healthy
+        required: false
     healthcheck:
       # Liveness only (ADR-015): a model outage must not mark the app unhealthy.
       # The slim image has no curl, so Python's standard library is used.
@@ -79,3 +88,32 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+
+  # Model server for Intel Macs, where Docker Model Runner is unavailable (ADR-020, TS-001).
+  # Enabled only by the `ollama` profile (COMPOSE_PROFILES=ollama in .env). Reachable only
+  # on the Compose network (no published port). Models live in the `ollama-models` volume:
+  # pull once with `docker compose exec ollama ollama pull gemma3:1b`, offline afterwards.
+  ollama:
+    profiles: ["ollama"]
+    image: ollama/ollama:0.40.1@sha256:69f27594d8127cb43db1edcafa5e2d3cd8f88bdbc54a2cf3ceb11b8d138a24b1
+    environment:
+      # Pinned context window the app's token budget assumes (TS-005, LLM_CONTEXT_TOKENS).
+      OLLAMA_CONTEXT_LENGTH: "4096"
+      # No cloud features: the model server, like the app, needs no internet (REQ-012).
+      OLLAMA_NO_CLOUD: "1"
+    volumes:
+      - ollama-models:/root/.ollama
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # The image has no curl; `ollama list` asks the running server over its API.
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+volumes:
+  ollama-models:

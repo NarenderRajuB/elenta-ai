@@ -5,12 +5,15 @@ Running the service day to day: logs and traces, how corpus changes are picked u
 ## Everyday commands
 
 ```bash
-docker compose up -d                 # start app + Jaeger (Ollama must already be running)
+docker compose up -d                 # start app + Jaeger + Ollama (the `ollama` profile set in .env)
 docker compose up -d --build         # after changing code or the Dockerfile; without --build the old image is reused (TS-004)
-docker compose ps                    # app shows (healthy) once /healthz answers
+docker compose ps                    # app and ollama show (healthy) once their checks pass
+docker compose exec ollama ollama list          # models in the Ollama container
+docker compose exec ollama ollama pull gemma3:1b # one-time model download (kept in the ollama-models volume)
+docker compose logs -f ollama        # the model server's own logs (loading, context size)
 curl -s http://127.0.0.1:8000/readyz # is the model reachable?
 docker compose logs -f app           # follow the app's logs
-docker compose down                  # stop everything; traces are discarded, ./data is untouched
+docker compose down                  # stop everything; traces are discarded; ./data and the model volume are kept
 ```
 
 ## Logs
@@ -89,9 +92,9 @@ All app state (corpus snapshot, search index) is in memory and rebuilt from `./d
 | App restarted (`docker compose restart app`, or `down` then `up -d`) | The first question re-reads `./data` and rebuilds the index; later questions are fast again | Nothing |
 | App exits at startup | Invalid configuration (exit code 2): every problem is listed in `docker compose logs app` | Fix `.env`, then `docker compose up -d` |
 | App container crashes or is killed | Compose sets **no restart policy**, so it stays stopped | `docker compose up -d` |
-| Ollama stopped or not started | `/readyz` returns 503 `unreachable`; questions get an `error` event `model_unavailable` (questions with no evidence are still answered, without the model). The app stays up and healthy | Start Ollama. The next question works: the app's HTTP client connects again on the next call, so no app restart is needed |
-| Mac rebooted | Ollama's `OLLAMA_CONTEXT_LENGTH` and `OLLAMA_NO_CLOUD` settings are lost (TS-005) | Run the two `launchctl setenv` lines from [Setup](setup.md#3-prepare-the-model-server) again, then restart Ollama |
-| Model removed from Ollama | `/readyz` returns 503 `model_not_found` | `ollama pull gemma3:1b` |
+| Ollama stopped or not started | `/readyz` returns 503 `unreachable`; questions get an `error` event `model_unavailable` (questions with no evidence are still answered, without the model). The app stays up and healthy | `docker compose up -d` (or start the host's Ollama, setup C). The next question works: the app's HTTP client connects again on the next call, so no app restart is needed |
+| Mac rebooted | Ollama in Compose: nothing lost; its settings are in `compose.yaml`. Ollama installed on the host (setup C): `OLLAMA_CONTEXT_LENGTH` and `OLLAMA_NO_CLOUD` are lost (TS-005) | `docker compose up -d`. Setup C: run the two `launchctl setenv` lines from [Setup](setup.md#ollama-installed-natively-on-the-host) again, then restart Ollama |
+| Model missing (first start, or volume removed with `docker compose down -v`) | `/readyz` returns 503 `model_not_found` | `docker compose exec ollama ollama pull gemma3:1b` (needs internet once) |
 | Jaeger stopped or restarted | Answers keep working. While Jaeger is down, the exporter logs `Transient error …` (WARNING) and `Failed to export spans batch …` (ERROR), and those requests' traces are lost (verified 2026-10-09). After a restart, earlier traces are gone too (in memory only) | `docker compose up -d` starts it again |
 | `./data` disappears while running | Empty corpus served, logged as `corpus_dir_missing`; the app keeps running | Restore the folder; the next question uses it |
 | Code or Dockerfile changed | The running container still has the old code | `docker compose up -d --build` |
@@ -100,7 +103,7 @@ All app state (corpus snapshot, search index) is in memory and rebuilt from `./d
 ## Checking the system
 
 ```bash
-scripts/verify.sh --container   # tests, lint, types, security scans of code, secrets, dependencies and both images
+scripts/verify.sh --container   # tests, lint, types, security scans of code, secrets, dependencies and all three images
 ```
 
 Each check's full output and a summary are saved under `docs/evidence/verify/` (REQ-120 – REQ-123). Re-run it after changes and before a review; pip-audit and Trivy need internet to fetch current vulnerability data (`--offline` skips them).
@@ -109,7 +112,7 @@ Each check's full output and a summary are saved under `docs/evidence/verify/` (
 
 | Platform | Status | Notes |
 |---|---|---|
-| **macOS, Docker Desktop (Intel)** | Verified | The bind mount passes size, modification time, change time and inode through, so every kind of change is detected. No file watcher is used, so Docker Desktop's file-event limitations don't apply. The Docker VM clock trails macOS by under 1 ms, which only delays when a new file is served by that much (TS-004) |
+| **macOS, Docker Desktop (Intel)** | Verified, with Ollama in Compose (ADR-020) and with Ollama on the host | The bind mount passes size, modification time, change time and inode through, so every kind of change is detected. No file watcher is used, so Docker Desktop's file-event limitations don't apply. The Docker VM clock trails macOS by under 1 ms, which only delays when a new file is served by that much (TS-004) |
 | **macOS, Apple Silicon** | Not tested | Same as Intel for the app. Docker Model Runner is available there and can replace Ollama with a `.env` change ([Setup](setup.md#docker-model-runner-not-tested)) |
-| **Native Linux** | Not tested | `compose.yaml` maps `host.docker.internal` to the host. Ollama must listen on an address the container can reach (`OLLAMA_HOST=0.0.0.0`) and have `OLLAMA_CONTEXT_LENGTH=4096`. Change detection uses file metadata, not file events, so it should behave as on macOS (ADR-005) |
+| **Native Linux** | Not tested | The default setup (Ollama in Compose) needs nothing host-specific. With Ollama installed on the host instead, `compose.yaml` maps `host.docker.internal` to the host, but Ollama must listen on an address the container can reach and have `OLLAMA_CONTEXT_LENGTH=4096`. Change detection uses file metadata, not file events, so it should behave as on macOS (ADR-005) |
 | **Windows, Docker Desktop** | Not tested | Expected to behave like macOS Docker Desktop; files in `./data` on the Windows file system are reached through Docker Desktop's file sharing |

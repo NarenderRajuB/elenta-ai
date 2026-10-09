@@ -84,12 +84,12 @@ The app reads only under `/data` (REQ-064) and writes nowhere.
 
 ## Network assumptions
 
-- **Loopback only.** The app (`127.0.0.1:8000`) and the Jaeger UI (`127.0.0.1:16686`) are published on the host's loopback address, so other machines can't reach them. Jaeger's trace intake port (4318) is reachable only inside the Compose network.
+- **Loopback only.** The app (`127.0.0.1:8000`) and the Jaeger UI (`127.0.0.1:16686`) are published on the host's loopback address, so other machines can't reach them. Jaeger's trace intake port (4318) and the Ollama container's API (11434) are reachable only inside the Compose network: no browser or other machine can talk to the model server directly.
 - **No internet at runtime** (REQ-012). The app calls only `LLM_URL` and, under Compose, the bundled Jaeger. The trace exporter ignores proxy environment variables, so traces can't be sent elsewhere. Ollama's cloud features are switched off (`OLLAMA_NO_CLOUD=1`). Starting the container with no network at all works (a container test checks it).
 - **No encryption between local components.** App to Ollama and app to Jaeger use plain HTTP on the same machine.
 - **Host names checked.** Requests must name `localhost` or `127.0.0.1` in their `Host` header; anything else gets 400. This blocks DNS rebinding, where a web page on another site re-points its own domain at 127.0.0.1 to read answers, and through them corpus content (TS-015). Cross-site form posts are also refused, because `/chat` only accepts a JSON body.
 - **No authentication.** Anything running on this machine that can reach `127.0.0.1:8000` can ask questions. This suits the brief's single local user; the service must not be exposed to a network as it is.
-- **Native Linux:** to let the container reach Ollama, Ollama must listen beyond loopback (for example `OLLAMA_HOST=0.0.0.0`), which also exposes it to the local network unless a firewall blocks port 11434. Prefer the Docker bridge address.
+- **Native Linux:** the default setup (Ollama in Compose) needs no host listening at all. Only with Ollama installed on the host (setup C) must it listen beyond loopback for the container to reach it; `OLLAMA_HOST=0.0.0.0` would also expose it to the local network unless a firewall blocks port 11434, so prefer the Docker bridge address.
 
 ## Secrets
 
@@ -101,8 +101,9 @@ The app reads only under `/data` (REQ-064) and writes nowhere.
 ## Container and supply chain
 
 - Runs as a fixed non-root user (UID 10001), with a read-only root filesystem, all Linux capabilities dropped and `no-new-privileges` (REQ-066, ADR-012). A container test checks `CapEff` is all zeros.
-- Base images pinned by digest (`python:3.12-slim`, Jaeger 2.22.0); Python dependencies installed from `uv.lock` with hashes; no dev tools in the image; `pip` removed from the runtime image (TS-009).
-- Scanned on every verification run: **bandit** (code), **pip-audit** (dependencies), **gitleaks** (secrets) and **Trivy** (both images; the gate fails on any HIGH or CRITICAL finding that has a fix). Latest results: [evidence/verify/summary.md](evidence/verify/summary.md).
+- **Ollama container** (Intel Mac setup, ADR-020): the upstream image runs as root and keeps models under `/root/.ollama`; it runs with all Linux capabilities dropped and `no-new-privileges`, publishes no port, and has its cloud features off. The non-root rule (REQ-066) applies to the application container.
+- Images pinned by digest (`python:3.12-slim`, Jaeger 2.22.0, Ollama 0.40.1); Python dependencies installed from `uv.lock` with hashes; no dev tools in the image; `pip` removed from the runtime image (TS-009).
+- Scanned on every verification run: **bandit** (code), **pip-audit** (dependencies), **gitleaks** (secrets) and **Trivy** (all three images). For the app and Jaeger the gate fails on any HIGH or CRITICAL finding that has a fix; the Ollama image is report-only (see remaining risks). Latest results: [evidence/verify/summary.md](evidence/verify/summary.md).
 
 ## Remaining risks
 
@@ -115,4 +116,4 @@ Stated plainly, as the brief asks. Each is accepted for this scope, with the rea
 5. **No authentication**, by design for one local user (see Network assumptions).
 6. **Unexpected errors are logged with their stack trace and message**, which could include data from the failing operation. Traces record only the exception class.
 7. **Known vulnerabilities without a fix** remain in the Debian base image (164 findings, 0 critical; TS-009). Scan results are a snapshot: re-run `scripts/verify.sh` to pick up new findings.
-8. **Ollama is trusted to run the model** and isn't hardened by this project; on native Linux it may need to listen beyond loopback (see above).
+8. **The Ollama binary has 43 known HIGH vulnerabilities with upstream fixes** (Go standard library and `x/crypto`/`x/net` versions it was built with). Only an Ollama release can fix them; the container publishes no port, drops all capabilities and is reachable only by the app, so this is accepted and reported on every verification run (TS-016).

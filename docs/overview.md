@@ -27,7 +27,7 @@ It was built for the ELENTA AI Developer Practical Assessment. The brief values 
 ## Components at a glance
 
 - **App container** (`elenta-ai:local`): FastAPI service with the browser UI, the chat pipeline and health endpoints. Runs as a non-root user with a read-only filesystem.
-- **Model server:** Ollama, running natively on the host, serving `gemma3:1b`. Docker Model Runner is the brief's preferred backend but is not available on the development machine (ADR-013, TS-001); switching is a change to `LLM_URL` only.
+- **Model server:** Ollama in its own container, serving `gemma3:1b`, started by the same `docker compose up` (ADR-020). Docker Model Runner is the brief's preferred backend but is not available on the development machine, an Intel Mac (TS-001); switching to it, or to a natively installed Ollama, is a change to `.env` only.
 - **Trace viewer:** Jaeger, in its own container, keeping traces in memory.
 - **Corpus:** host `./data`, mounted read-only at `/data`.
 
@@ -55,5 +55,5 @@ These are deliberate trade-offs or measured weaknesses, each recorded where it w
 
 **Operations**
 - **Traces are lost when the Jaeger container restarts** (in-memory storage, ADR-008).
-- **Verified on macOS with Docker Desktop only.** Native Linux is configured for (`host.docker.internal` mapping) but not tested; Docker Model Runner is not tested (TS-001).
-- **Ollama must be started separately**; Compose cannot start or health-check it. `/readyz` reports when it is missing (ADR-015).
+- **Verified on an Intel Mac with Docker Desktop only.** Apple Silicon, native Linux and Docker Model Runner are configured for but not tested (TS-001, ADR-020).
+- **The model must be pulled once** into the Ollama container (`docker compose exec ollama ollama pull gemma3:1b`); until then `/readyz` reports `model_not_found`. The Ollama image is large (3.8 GB download) and its binary has known vulnerabilities only an upstream release can fix; it publishes no port (TS-016).

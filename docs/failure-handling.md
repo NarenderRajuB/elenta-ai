@@ -142,7 +142,7 @@ When `partial` is true the browser keeps the text received so far and adds *"The
 
 **Diagnostics:** `error` event with `code`, `message`, `partial` and `request_id`; log `model call failed` (WARNING) with the code and `partial`; trace `inference.stream` and `chat.request` with ERROR status and `error.code`. Separately, `/readyz` returns 503 with `unreachable`, `timeout`, `http_error`, `invalid_response` or `model_not_found`, so the problem can be seen before anyone asks a question.
 
-**Recovery:** start or restart Ollama, or fix `LLM_URL` / `LLM_MODEL`; the next question works without restarting the app ([Operations](operations.md#restart-and-recovery)).
+**Recovery:** start the model server (`docker compose up -d` for the Compose Ollama), or fix `LLM_URL` / `LLM_MODEL`, or pull the model (`docker compose exec ollama ollama pull gemma3:1b`); the next question works without restarting the app ([Operations](operations.md#restart-and-recovery)).
 
 **Related, also handled:**
 - **Answer cut off by the length limit:** the answer ends at `LLM_MAX_TOKENS` (512) and the request line shows finish reason `length`.

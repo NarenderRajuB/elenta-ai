@@ -1,6 +1,6 @@
 # Configuration
 
-Every environment variable the service reads, whether it is required, a safe example value, what it changes and what values are accepted (REQ-105). The reference file is [`.env.example`](../.env.example): a test checks it lists exactly the app's settings, and another that Compose passes every one of them to the container (TS-011).
+Every environment variable the service reads, whether it is required, a safe example value, what it changes and what values are accepted (REQ-105). The reference file is [`.env.example`](../.env.example): a test checks it lists exactly the app's settings plus `COMPOSE_PROFILES` (which Compose reads itself), and another that Compose passes every app setting to the container (TS-011).
 
 ## How configuration is loaded
 
@@ -18,11 +18,25 @@ Invalid configuration (2 problem(s)):
   - LLM_MODEL is required but is missing or empty
 ```
 
+## Model server choice (read by Docker Compose)
+
+| Variable | Required | Example (safe) | Default | Accepted values | Effect |
+|---|---|---|---|---|---|
+| `COMPOSE_PROFILES` | No | `ollama` | *(empty)* | `ollama` or empty | Read by **Docker Compose**, not by the app. `ollama` makes `docker compose up` also start the Ollama model server (the Intel Mac setup, ADR-020); then `LLM_URL` must be `http://ollama:11434/v1`. Leave it out when using Docker Model Runner or a natively installed Ollama |
+
+The three setups, all chosen in `.env` only:
+
+| Setup | `COMPOSE_PROFILES` | `LLM_URL` |
+|---|---|---|
+| A. Ollama in Compose (Intel Mac; the default in `.env.example`) | `ollama` | `http://ollama:11434/v1` |
+| B. Docker Model Runner | *(not set)* | `http://model-runner.docker.internal/engines/v1` |
+| C. Ollama installed on the host | *(not set)* | `http://host.docker.internal:11434/v1` |
+
 ## Model endpoint
 
 | Variable | Required | Example (safe) | Default | Accepted values | Effect |
 |---|---|---|---|---|---|
-| `LLM_URL` | **Yes** | `http://host.docker.internal:11434/v1` | — | `http`/`https` URL with a host; valid port if given; no query string or fragment. A trailing `/` is removed | Base URL of any OpenAI-compatible endpoint. The app calls `{LLM_URL}/chat/completions` and, for readiness, `{LLM_URL}/models`. Choosing this URL is how the backend is chosen (Ollama, Docker Model Runner, other); the trace labels it `llm.backend` |
+| `LLM_URL` | **Yes** | `http://ollama:11434/v1` | — | `http`/`https` URL with a host; valid port if given; no query string or fragment. A trailing `/` is removed | Base URL of any OpenAI-compatible endpoint. The app calls `{LLM_URL}/chat/completions` and, for readiness, `{LLM_URL}/models`. Choosing this URL is how the backend is chosen (Ollama, Docker Model Runner, other); the trace labels it `llm.backend` |
 | `LLM_MODEL` | **Yes** | `gemma3:1b` | — | Any non-blank text | Model name sent to the endpoint unchanged. `/readyz` checks the endpoint lists it exactly |
 | `LLM_TEMPERATURE` | No | `0` | `0` | 0 to 2 | Sampling temperature. `0` makes answers as repeatable as the server allows; the injection evaluation was run at 0 (TS-006) |
 | `LLM_CONTEXT_TOKENS` | No | `4096` | `4096` | Whole number ≥ 1 | The model's context window. **Must match the server** (Ollama is pinned to 4096, TS-005); the app can't read it from the server through the standard API |
@@ -82,11 +96,12 @@ Even when these pass, a very long question can still be too big for one request;
 
 | Goal | Change |
 |---|---|
-| Use Docker Model Runner | `LLM_URL=http://model-runner.docker.internal/engines/v1` and `LLM_MODEL` = its model name ([Setup](setup.md#docker-model-runner-not-tested)) |
+| Use Docker Model Runner | Remove `COMPOSE_PROFILES`; `LLM_URL=http://model-runner.docker.internal/engines/v1` and `LLM_MODEL` = its model name ([Setup](setup.md#docker-model-runner-not-tested)) |
+| Use an Ollama installed on the host | Remove `COMPOSE_PROFILES`; `LLM_URL=http://host.docker.internal:11434/v1` ([Setup](setup.md#ollama-installed-natively-on-the-host)) |
 | Use another model | `LLM_MODEL`; keep it at most 1B parameters (REQ-020), and set `LLM_CONTEXT_TOKENS` to the server's context window |
 | Slow machine, model times out before the first word | Raise `LLM_READ_TIMEOUT_SECONDS` (and `LLM_REQUEST_TIMEOUT_SECONDS` if long answers are cut off) |
 | Longer answers | Raise `LLM_MAX_TOKENS`; check rule 3 still holds, lowering `CONTEXT_TOKEN_BUDGET` if needed |
 | More evidence per question | Raise `CONTEXT_TOKEN_BUDGET` within rule 3 |
 | Larger files or more of them | `CORPUS_MAX_FILE_BYTES`, `CORPUS_MAX_FILES`. Every question re-scans the corpus, so very large corpora make questions slower |
 | Files copied slowly over a network share | Raise `CORPUS_SETTLE_SECONDS` |
-| Run outside Docker | `LLM_URL=http://localhost:11434/v1` (the host's own address) and `CORPUS_DIR=./data` ([Setup](setup.md#without-docker-development)) |
+| Run outside Docker | `LLM_URL=http://localhost:11434/v1` (an Ollama on the host) and `CORPUS_DIR=./data` ([Setup](setup.md#without-docker-development)) |

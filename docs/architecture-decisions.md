@@ -4,7 +4,7 @@ Decision log required by brief §5.11 (REQ-110, REQ-112). Entries are appended *
 
 **Statuses**: `Proposed` (drafted, awaiting candidate acceptance) · `Accepted` · `Superseded` · `Rejected`.
 
-> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-002, ADR-004, ADR-005, ADR-006, ADR-007, ADR-008, ADR-009, ADR-010, ADR-011, ADR-012, ADR-013 (model superseded), ADR-014, ADR-015, ADR-016, ADR-018, ADR-019. Rejected: ADR-003, ADR-017.
+> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-002, ADR-004, ADR-005, ADR-006, ADR-007, ADR-008, ADR-009, ADR-010, ADR-011, ADR-012, ADR-013 (model superseded), ADR-014, ADR-015, ADR-016, ADR-018, ADR-019, ADR-020. Rejected: ADR-003, ADR-017.
 
 Template:
 
@@ -349,6 +349,7 @@ Template:
 ## ADR-013: Ollama (OpenAI-compatible endpoint) as backend, model `qwen2.5:0.5b` (Q4_K_M)
 
 > **Model superseded by ADR-016 (2026-10-08):** the model is now `gemma3:1b`. The Ollama backend and Option B (native on the host) in this ADR still stand.
+> **Topology revised by ADR-020 (2026-10-09):** on Intel Macs Ollama now runs inside Compose (close to Option A, enabled by a Compose profile). Option B (native on the host) remains available as a `.env` choice.
 
 - **Status:** Accepted, with Option B (Ollama native on the host), chosen by the candidate on 2026-10-08 · **Date:** 2026-10-08
 - **Requirements:** REQ-001, REQ-011, REQ-012, REQ-015, REQ-020, REQ-021, REQ-022, REQ-055, REQ-083
@@ -542,6 +543,41 @@ Template:
 - − False positives: equally relevant documents that agree also get the notice, hence the wording "may disagree".
 - − False negatives: a conflicting document scoring under 80% of the top, or not fitting the evidence budget, isn't named.
 - − The answer text itself may still give one value; the notice says so ("the answer may reflect only one of them").
+
+---
+
+## ADR-020: Ollama as a Compose service on Intel Macs, enabled by a Compose profile
+
+- **Status:** Accepted by the candidate on 2026-10-09 ("pull Ollama into Docker, but only for Intel Mac"), including report-only scanning of the Ollama image · **Date:** 2026-10-09
+- **Requirements:** REQ-011, REQ-012, REQ-015, REQ-021, REQ-022, REQ-122
+- **Revises:** ADR-013 (topology). Backend and model (ADR-016) unchanged.
+
+**Context.** Brief §5.1: "After the model has been pulled, a single `docker compose up` must bring up the complete working system." With Ollama native on the host (ADR-013 option B), `docker compose up` started the app and Jaeger but not the model server; ADR-013 recorded this as weaker against REQ-011, and the independent review flagged it as the main compliance risk. Docker Model Runner, the preferred backend, is unavailable on Intel Macs (TS-001). On an Intel Mac, native Ollama runs on the CPU, so running it in Docker's Linux VM costs little.
+
+**Decision.**
+- `compose.yaml` gets an `ollama` service (`ollama/ollama:0.40.1`, pinned by digest, the same version as the native install) in the **`ollama` profile**. `.env.example` enables it with `COMPOSE_PROFILES=ollama`, which Compose reads from `.env`, so plain `docker compose up` starts app, Jaeger and Ollama.
+- `LLM_URL=http://ollama:11434/v1`: the app reaches it over the Compose network. **No port is published**; nothing outside the Compose network can reach it.
+- Models are kept in the named volume `ollama-models`. One-time pull: `docker compose exec ollama ollama pull gemma3:1b`. After that the system runs with no internet.
+- Server settings in Compose: `OLLAMA_CONTEXT_LENGTH=4096` (matches `LLM_CONTEXT_TOKENS`, TS-005) and `OLLAMA_NO_CLOUD=1` (REQ-012); no `launchctl` setup needed.
+- Hardening: all Linux capabilities dropped, `no-new-privileges`. The image runs as root and stores models under `/root/.ollama`; changing that would mean rebuilding the upstream image, so it is left as is (the brief's non-root rule is for the application container, which stays UID 10001).
+- The app waits for Ollama's health check (`ollama list`) only when the profile is enabled (`depends_on` with `required: false`).
+- Other machines choose in `.env`, with no code or Compose change: Docker Model Runner (`LLM_URL=http://model-runner.docker.internal/engines/v1`, no profile) or native Ollama (`LLM_URL=http://host.docker.internal:11434/v1`, no profile).
+- Image scanning: the Ollama image is scanned on every verification run, **report only** (TS-016).
+
+**Rationale.** Meets REQ-011 literally on the machine the system is demonstrated on, while keeping Docker Model Runner, the preferred backend, a configuration choice where it exists. A profile keeps one Compose file and avoids running a second model server next to Docker Model Runner.
+
+**Alternatives rejected.**
+- *Always run Ollama in Compose:* would start a redundant 9 GB model server on machines with Docker Model Runner.
+- *Keep Ollama native only (ADR-013 option B):* `docker compose up` doesn't start the complete system.
+- *A second Compose file (`compose.ollama.yaml`):* needs `-f` flags, so not a single plain `docker compose up`.
+- *Copying the host's model files into the volume:* saves one download but ties the setup to the host's Ollama store layout.
+
+**Consequences.**
+- + `docker compose up` starts the complete system on Intel Macs. Verified: Ollama healthy with capabilities dropped, model pulled into the volume (1 min 40 s), streamed answers through the app (first token 4.1 s cold, 0.2–0.3 s warm, same as native), `llm.backend=ollama` with `server.address=ollama` on the trace, and the model answering on a Docker network with no internet access.
+- + Ollama is no longer exposed on the host at all; on native Linux it no longer needs to listen on `0.0.0.0` (ADR-013).
+- − The image is large: 3.8 GB download, 9.4 GB unpacked (it bundles GPU libraries the CPU-only setup doesn't use).
+- − The Ollama binary carries 43 fixable HIGH findings that only an upstream rebuild can fix; accepted as report-only (TS-016).
+- − The container's `gemma3:1b` has a different model ID (`97558784bdc9`) from the native copy; it was checked: 999.89M parameters, Q4_K_M.
 
 ---
 

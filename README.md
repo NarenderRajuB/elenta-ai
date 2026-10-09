@@ -31,7 +31,7 @@ Start with [docs/README.md](docs/README.md), the index of the guide.
 |---|---|---|
 | Language / web stack | Python 3.12, FastAPI + Uvicorn | ADR-001 |
 | Outbound HTTP client | `httpx`, ignoring proxy env vars (`trust_env=False`); no internet needed after install | ADR-002 |
-| Model backend | Ollama running **natively on the host** (Docker Model Runner is unavailable on Intel Macs, see TS-001) | ADR-013 |
+| Model backend | Ollama as a **Compose service** on Intel Macs, enabled by the `ollama` profile (Docker Model Runner is unavailable there, TS-001); Docker Model Runner or a host Ollama via `.env` | ADR-013, ADR-020 |
 | Model | `gemma3:1b`, 999.89M parameters, Q4_K_M GGUF (chosen after the injection evaluation; was `qwen2.5:0.5b`) | ADR-016 |
 | Configuration | Environment variables only, read in one module, fail fast | ADR-011 |
 | Python tooling | `uv` with a committed `uv.lock` | ADR-014 |
@@ -49,12 +49,10 @@ Start with [docs/README.md](docs/README.md), the index of the guide.
 
 Step-by-step setup, including other platforms: [docs/setup.md](docs/setup.md).
 
-- [uv](https://docs.astral.sh/uv/) 0.11+ (it provides Python 3.12 from `.python-version`)
-- Ollama running on the host with `gemma3:1b` pulled (`ollama pull gemma3:1b`), context pinned to 4096 tokens (see [Ollama setup](#ollama-setup)). Needed to see `/readyz` report *ready*. The automated tests do **not** need it.
+- Docker Desktop (tested: 4.94, Compose v5.5.1). It runs the app, Jaeger and, on Intel Macs, Ollama (see [Ollama setup](#ollama-setup)); about 10 GB of disk for the Ollama image and 0.8 GB for the model.
+- [uv](https://docs.astral.sh/uv/) 0.11+ (it provides Python 3.12 from `.python-version`), only for the tests or a run without Docker. The automated tests need neither Ollama nor internet.
 
-- Docker Desktop (tested: 4.94, Compose v5.5.1) for the containerised run.
-
-Internet is needed once, for `uv sync`, `ollama pull` and the first `docker compose build`, which pulls the pinned `python:3.12-slim` base. After that everything runs offline.
+Internet is needed once: for `uv sync`, the first `docker compose up --build` (pinned base, Jaeger and Ollama images) and the one-time model pull. After that everything runs offline.
 
 ## Asking a question
 
@@ -134,38 +132,30 @@ Streamed `error` events carry the same `request_id`.
 
 ## Ollama setup
 
-The app's evidence budget (1500 tokens) assumes the model server's context window is **4096 tokens**. Ollama otherwise picks it from available VRAM ("4k/32k/256k"), which would vary between machines (TS-005). For the macOS Ollama app:
+On an Intel Mac, where Docker Model Runner is unavailable (TS-001), **Ollama runs as a Compose service** (ADR-020). `.env.example` enables it with `COMPOSE_PROFILES=ollama` and points the app at it with `LLM_URL=http://ollama:11434/v1`. The service pins the context window to **4096 tokens**, which the app's evidence budget assumes (TS-005), and switches off Ollama's cloud features (REQ-012). It publishes no port. Pull the model once:
 
 ```bash
-launchctl setenv OLLAMA_CONTEXT_LENGTH 4096   # pin the context window
-launchctl setenv OLLAMA_NO_CLOUD 1            # disable Ollama's cloud features (offline posture, REQ-012)
-# both are lost on reboot: re-run after restarting the Mac
-# then quit Ollama from the menu bar and reopen it
-ollama run gemma3:1b "hi" >/dev/null && ollama ps   # CONTEXT column must show 4096
+docker compose up -d
+docker compose exec ollama ollama pull gemma3:1b   # once; kept in the ollama-models volume
+docker compose logs ollama | grep -E "CONTEXT_LENGTH|cloud disabled"   # 4096 and true
 ```
 
-`ollama ps` lists only *loaded* models; an empty table just means the model was unloaded after 5 minutes idle.
-
-To confirm the running server picked up both settings:
-
-```bash
-ps eww -o command= -p "$(pgrep -f 'ollama serve' | head -1)" | tr ' ' '\n' | grep -E 'OLLAMA_(CONTEXT_LENGTH|NO_CLOUD)'
-# expected: OLLAMA_CONTEXT_LENGTH=4096 and OLLAMA_NO_CLOUD=1
-```
+Docker Model Runner, or an Ollama installed on the host, can be used instead by changing `.env` only: [docs/setup.md](docs/setup.md#other-platforms).
 
 ## Running with Docker Compose
 
 ```bash
 cp .env.example .env          # first time only; adjust if needed
 docker compose build          # first time only (online: base image + dependencies)
-docker compose up -d          # the single startup command
-docker compose ps             # STATUS shows (healthy) once /healthz answers
+docker compose up -d          # the single startup command: app, Jaeger and Ollama
+docker compose exec ollama ollama pull gemma3:1b   # first time only (online)
+docker compose ps             # app and ollama show (healthy)
 curl -i http://127.0.0.1:8000/readyz
 docker compose logs -f app
 docker compose down
 ```
 
-- `LLM_URL` in `.env` uses `host.docker.internal`, which is how the container reaches Ollama on the host. This was verified on Docker Desktop for Mac (ADR-013).
+- `LLM_URL=http://ollama:11434/v1` reaches the Ollama service over the Compose network; `COMPOSE_PROFILES=ollama` in `.env` is what starts it (ADR-020). With an Ollama installed on the host instead, `LLM_URL=http://host.docker.internal:11434/v1` and no profile (verified on Docker Desktop for Mac, ADR-013).
 - Inside the container `APP_HOST`/`APP_PORT` are fixed to `0.0.0.0:8000`. The port is published on **host loopback only** (`127.0.0.1:8000`).
 - `./data` is mounted read-only at `/data`. Files added on the host are visible in the container immediately.
 - If `.env` is missing or incomplete, the container exits with code **2** and lists the missing variables (`docker compose logs app`).
@@ -182,7 +172,7 @@ LLM_URL=http://localhost:11434/v1 LLM_MODEL=gemma3:1b CORPUS_DIR=./data uv run p
 
 `CORPUS_DIR=./data` is needed outside Docker because the default `/data` only exists in the container.
 
-When running directly on the Mac, `LLM_URL` uses `localhost`. `host.docker.internal` (as in `.env.example`) only resolves from inside a container.
+When running directly on the Mac, `LLM_URL` uses `localhost`. `host.docker.internal` and `ollama` only resolve from inside a container.
 
 Health check, in another terminal:
 
@@ -228,7 +218,7 @@ Run a single requirement's tests, for example:
 uv run pytest -v tests/test_config.py::TestReq016FailFast
 ```
 
-Current result: **592 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Test-only dev dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The other dev tools are listed below. The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
+Current result: **600 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Test-only dev dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The other dev tools are listed below. The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
 
 ## Code quality and security checks (REQ-120..123)
 
@@ -241,7 +231,7 @@ uv run pre-commit install          # once per clone: adds the git hook
 uv run pre-commit run --all-files  # run the hooks by hand
 ```
 
-The full verification run adds the tests, gitleaks (secrets), pip-audit and Trivy (both container images: the app and Jaeger), and saves every tool's output plus `summary.md` under `docs/evidence/verify/`:
+The full verification run adds the tests, gitleaks (secrets), pip-audit and Trivy (all three container images: the app, Jaeger and Ollama; Ollama report-only, TS-016), and saves every tool's output plus `summary.md` under `docs/evidence/verify/`:
 
 ```bash
 scripts/verify.sh               # everything except container tests
@@ -452,6 +442,12 @@ Code: `Dockerfile`, `compose.yaml`, `.dockerignore` · Tests: `tests/test_contai
 | ⚠️ | `pytest` / `httpx2` in image | Absent | 012 |
 | ⚠️ | Started with `--network none` | `/healthz` 200, `/readyz` 503 `unreachable`, so no internet is needed to start | 012 |
 | ⚠️ | Native Linux Docker | `host.docker.internal:host-gateway` alias present (not tested on Linux) | 046 |
+| ✅ | `COMPOSE_PROFILES=ollama` | Ollama service added; app waits for it to be healthy (`required: false`) | 011 |
+| ✅ | Ollama service | Pinned by digest, `OLLAMA_NO_CLOUD=1`, context = the app's `LLM_CONTEXT_TOKENS` (4096), `ollama list` health check | 012, 055 |
+| ✅ | `.env.example` default | `COMPOSE_PROFILES=ollama`, `LLM_URL=http://ollama:11434/v1`; the app reads no Compose variable | 011, 013 |
+| ❌ | No profile (Docker Model Runner or host Ollama) | No Ollama service; only app and Jaeger | 015 |
+| ❌ | Ollama service ports and privileges | No published port; `cap_drop: [ALL]`, `no-new-privileges` | 012 |
+| ⚠️ | Ollama models | Kept in the named volume `ollama-models` at `/root/.ollama` | 011 |
 
 ### REQ-041: Supported formats (and limits)
 Code: `app/ingestion.py` · Tests: `tests/test_corpus.py::TestReq041Formats`, `::TestLimits`

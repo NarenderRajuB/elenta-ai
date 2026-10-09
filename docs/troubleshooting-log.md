@@ -377,3 +377,17 @@ With a 1B model, small wording changes had large, unpredictable effects, so the 
 **Diagnosis.** Publishing on `127.0.0.1` stops other machines connecting, but not a web page in the user's own browser: a site can re-point its domain at 127.0.0.1 (DNS rebinding), after which the browser treats the app as same-origin with that site and lets it read responses, so answers and corpus content could be read. Such requests carry the attacker's host name. A plain cross-site form post was already refused (422), because `/chat` only accepts a JSON body.
 
 **Resolution.** Starlette's `TrustedHostMiddleware` with `ALLOWED_HOSTS = ["localhost", "127.0.0.1"]` (`app/main.py`); other hosts get 400. Tests use `base_url="http://127.0.0.1"` instead of Starlette's default `testserver`, so no test-only name is allowed in production. New tests: local names with and without a port are served; a foreign host gets 400 on `/`, `/healthz`, static files and `/chat` (nothing streamed); look-alike and empty hosts get 400. Verified live through Compose: the container stays healthy, `127.0.0.1` and `localhost` get 200, `attacker.example` gets 400.
+
+---
+
+## TS-016: Ollama image fails the Trivy gate (upstream binary)
+
+- **Date:** 2026-10-09
+- **Phase:** Ollama as a Compose service (ADR-020)
+- **Related:** REQ-122, ADR-018, ADR-020, TS-009, TS-010
+
+**Symptom.** Trivy 0.75.0 on `ollama/ollama:0.40.1` (digest `sha256:69f27594…`): OS packages (Ubuntu 24.04) 17 findings, none HIGH or CRITICAL; the `/usr/bin/ollama` Go binary 75 findings, of which **43 HIGH have a fix** (0 CRITICAL). The gate used for the app and Jaeger images would fail.
+
+**Diagnosis.** All 43 are in Go code compiled into the Ollama binary: the Go standard library 1.26.0 (22), `golang.org/x/crypto` 0.43.0 (10), `x/net` 0.46.0 (5), `x/image` (2), `x/mod` (2), `x/text` (1), `github.com/buger/jsonparser` (1). They can only be fixed by Ollama's maintainers rebuilding with newer versions; nothing in this project's Dockerfile or configuration changes them. Unlike Jaeger (TS-010), the newest release (0.40.2, one day newer) was not scanned, as it was expected to be built the same way and is another 3.8 GB download.
+
+**Resolution / accepted risk.** Decided by the candidate: `scripts/verify.sh` always scans the Ollama image and saves the full report (`trivy-ollama-report.txt`); its gate is reported as skipped ("report only: accepted risk, TS-016"). App and Jaeger images keep their gates. Reasons the risk is accepted for this scope: the Ollama container publishes no port and is reachable only by the app on the Compose network; it runs with all Linux capabilities dropped and `no-new-privileges`; it handles only prompts built by the app. Re-check when a new Ollama release is pinned.

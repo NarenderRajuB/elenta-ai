@@ -1,21 +1,20 @@
 # Setup
 
-From a fresh machine to a first streamed answer (REQ-104). Verified on macOS 15 (Intel) with Docker Desktop; other platforms are covered in [Other platforms](#other-platforms) with what is and isn't tested.
+From a fresh machine to a first streamed answer (REQ-104). Verified on macOS 15 (Intel) with Docker Desktop, with Ollama running inside Compose; other platforms are covered in [Other platforms](#other-platforms) with what is and isn't tested.
 
-Internet is needed **once**: to install the tools, pull the model and build the image. After that the system runs with no internet (REQ-012).
+Internet is needed **once**: to install the tools, download the images and the model, and build the app image. After that the system runs with no internet (REQ-012).
 
 ## 1. Prerequisites
 
 | Tool | Version tested | Needed for |
 |---|---|---|
-| Docker Desktop | 4.94 (Engine 29.8.2, Compose v5.5.1) | Running the service and the trace viewer |
-| Ollama | 0.40.1 | Serving the model on the host |
+| Docker Desktop | 4.94 (Engine 29.8.2, Compose v5.5.1) | Everything: the service, the trace viewer and, on Intel Macs, the model server |
 | Git | any | Getting the code |
 | [uv](https://docs.astral.sh/uv/) | 0.11.24 | Only for running the tests or the service outside Docker; it provides Python 3.12 |
 
-Hardware: the model needs about 1 GB of memory; it runs on CPU. The first token of an answer takes a few seconds on the tested Intel MacBook Pro.
+Hardware: the model runs on the CPU and needs about 1.5 GB of memory (the tested Docker VM has 8 GB and 12 CPUs). Disk: about 10 GB for the Ollama image and 0.8 GB for the model. The first answer after a start takes about 4 seconds while the model loads; later answers start in well under a second.
 
-**Why Ollama and not Docker Model Runner?** The brief prefers Docker Model Runner, but it is not available on Intel Macs (TS-001), so this setup uses Ollama, which the brief permits. The app works with either; see [Docker Model Runner](#docker-model-runner-not-tested).
+**Which model server?** The brief prefers Docker Model Runner, but it isn't available on Intel Macs (TS-001), so on an Intel Mac **Ollama runs inside Compose** (ADR-020), which the brief permits. Other machines can use Docker Model Runner or a natively installed Ollama instead, by changing `.env` only; see [Other platforms](#other-platforms).
 
 ## 2. Get the code
 
@@ -24,40 +23,42 @@ git clone https://github.com/NarenderRajuB/elenta-ai.git
 cd elenta-ai
 ```
 
-## 3. Prepare the model server
-
-Ollama must use a **4,096-token context window**, which the app's token budget assumes (TS-005); otherwise Ollama picks a size from available memory and results vary between machines. Ollama's cloud features are switched off so the model server, like the app, has no internet-dependent features (ADR-013).
-
-For the macOS Ollama app:
-
-```bash
-launchctl setenv OLLAMA_CONTEXT_LENGTH 4096   # pin the context window
-launchctl setenv OLLAMA_NO_CLOUD 1            # disable Ollama's cloud features
-# Quit Ollama from the menu bar and open it again so it picks these up.
-# Both settings are lost on reboot: run the two lines again after restarting the Mac.
-
-ollama pull gemma3:1b                          # one-time download, about 815 MB
-ollama run gemma3:1b "hi" >/dev/null && ollama ps   # CONTEXT column must show 4096
-```
-
-`gemma3:1b` is a quantised GGUF model (Q4_K_M) with 999.89M parameters, inside the brief's 1-billion limit. It was chosen after an evaluation against two other small models (ADR-016, [injection evaluation](evidence/injection-eval.md)).
-
-To confirm the running server picked up both settings:
-
-```bash
-ps eww -o command= -p "$(pgrep -f 'ollama serve' | head -1)" | tr ' ' '\n' | grep -E 'OLLAMA_(CONTEXT_LENGTH|NO_CLOUD)'
-# expected: OLLAMA_CONTEXT_LENGTH=4096 and OLLAMA_NO_CLOUD=1
-```
-
-## 4. Configure
+## 3. Configure
 
 ```bash
 cp .env.example .env
 ```
 
-The example values work as they are for this setup: `LLM_URL=http://host.docker.internal:11434/v1` (Ollama on the host, as seen from the container) and `LLM_MODEL=gemma3:1b`. Every other setting is optional; see [Configuration](configuration.md). `.env` is git-ignored.
+The example values are the Intel Mac setup and work as they are:
 
-## 5. Add documents
+```bash
+COMPOSE_PROFILES=ollama            # read by Docker Compose: also start the ollama service
+LLM_URL=http://ollama:11434/v1     # the ollama service on the Compose network
+LLM_MODEL=gemma3:1b
+```
+
+Every other setting is optional; see [Configuration](configuration.md). `.env` is git-ignored.
+
+## 4. Start
+
+```bash
+docker compose up -d --build
+```
+
+The first run downloads the pinned images (Python base, Jaeger, and Ollama at 3.8 GB) and the Python dependencies, so it needs internet and takes a while. After that, **`docker compose up -d` alone starts the complete system** (REQ-011): the app on http://127.0.0.1:8000, the Jaeger trace viewer on http://127.0.0.1:16686 (both reachable from this machine only), and the Ollama model server, which is reachable only by the app.
+
+## 5. Pull the model (once)
+
+```bash
+docker compose exec ollama ollama pull gemma3:1b   # about 800 MB, kept in the ollama-models volume
+docker compose exec ollama ollama list             # gemma3:1b listed
+```
+
+`gemma3:1b` is a quantised GGUF model (Q4_K_M) with 999.89M parameters, inside the brief's 1-billion limit. It was chosen after an evaluation against two other small models (ADR-016, [injection evaluation](evidence/injection-eval.md)). The model stays in the volume across restarts and `docker compose down`; from now on nothing needs the internet (REQ-012).
+
+The Ollama service is already configured with a **4,096-token context window**, which the app's token budget assumes (TS-005), and with its cloud features switched off. Its logs confirm both: `docker compose logs ollama | grep -E "CONTEXT_LENGTH|cloud disabled"`.
+
+## 6. Add documents
 
 Put `.txt` or `.md` files (UTF-8) in `./data`, in subfolders if you like. For a first test:
 
@@ -65,22 +66,12 @@ Put `.txt` or `.md` files (UTF-8) in `./data`, in subfolders if you like. For a 
 printf '# Leave policy\n\nEmployees receive 25 days of paid annual leave per calendar year.\n' > data/leave-policy.md
 ```
 
-Files can be added, changed or removed at any time while the service runs; the next question uses them.
-
-## 6. Start
-
-```bash
-docker compose up -d --build
-```
-
-The first build downloads the pinned Python base image and the dependencies (internet needed). After that, **`docker compose up -d` alone starts the complete system** (REQ-011): the app on http://127.0.0.1:8000 and the Jaeger trace viewer on http://127.0.0.1:16686. Both are reachable from this machine only.
-
-Ollama is not started by Compose; it must already be running (step 3).
+Files can be added, changed or removed at any time while the service runs; the next question uses them (a new file is served about half a second after it was last written).
 
 ## 7. Check health
 
 ```bash
-docker compose ps                         # app shows (healthy) after a few seconds
+docker compose ps                         # app and ollama show (healthy) after a few seconds
 curl -i http://127.0.0.1:8000/healthz     # 200 {"status":"ok"}: the app is up
 curl -i http://127.0.0.1:8000/readyz      # 200 {"status":"ready",...}: the model is reachable
 ```
@@ -89,11 +80,11 @@ curl -i http://127.0.0.1:8000/readyz      # 200 {"status":"ready",...}: the mode
 
 | `/readyz` reason | Meaning | Fix |
 |---|---|---|
-| `unreachable` | Nothing answering at `LLM_URL` | Start the Ollama app (or `ollama serve`); check `LLM_URL` |
+| `unreachable` | Nothing answering at `LLM_URL` | `docker compose ps ollama` (start it with `docker compose up -d`); check `LLM_URL` and `COMPOSE_PROFILES` in `.env` |
 | `timeout` | Model server slower than `LLM_HEALTH_TIMEOUT_SECONDS` (3 s) | Check the host's load; raise the timeout |
 | `http_error` | Model server answered with an error status | Check that `LLM_URL` ends in `/v1` |
 | `invalid_response` | The answer isn't an OpenAI-style model list | `LLM_URL` points at something that isn't OpenAI-compatible |
-| `model_not_found` | Server is up but `LLM_MODEL` isn't listed (exact match) | `ollama pull gemma3:1b`, or fix the name |
+| `model_not_found` | Server is up but `LLM_MODEL` isn't listed (exact match) | Step 5 (`docker compose exec ollama ollama pull gemma3:1b`), or fix the name |
 
 If `docker compose ps` doesn't list the app, it exited at startup because its configuration is invalid: `docker compose logs app` lists every problem (exit code 2).
 
@@ -108,7 +99,7 @@ curl -N -X POST http://127.0.0.1:8000/chat -H 'Content-Type: application/json' \
      -d '{"question":"How many days of annual leave do employees get?"}'
 ```
 
-Output from a run on 2026-10-09 with the document from step 5 (the request id differs every time; some `sources` fields left out):
+Output from a run on 2026-10-09 with the document from step 6 (the request id differs every time; some `sources` fields left out):
 
 ```text
 event: meta
@@ -135,27 +126,42 @@ The several `token` events are the progressive stream. To see the same request i
 ## 9. Stop
 
 ```bash
-docker compose down     # stops the app and Jaeger; traces are discarded, ./data is untouched
+docker compose down     # stops everything; traces are discarded; ./data and the downloaded model are kept
 ```
 
 ## Other platforms
 
-### Native Linux (not tested)
-
-- `compose.yaml` maps `host.docker.internal` to the host (`host-gateway`), so the same `LLM_URL` works.
-- Ollama listens on `127.0.0.1` by default, which a container can't reach on Linux. Start it with `OLLAMA_HOST=0.0.0.0` (or the Docker bridge address), and `OLLAMA_CONTEXT_LENGTH=4096` (ADR-013).
-- File-change detection doesn't depend on file-system events, so it should behave the same as on macOS (ADR-005).
+The model server is chosen in `.env` only; no code or Compose change (REQ-015, ADR-020). Each trace records which backend served the request (`llm.backend`).
 
 ### Docker Model Runner (not tested)
 
-On a machine where Docker Model Runner is available (for example Apple Silicon with it enabled in Docker Desktop), pull a quantised model of at most 1B parameters from Docker Hub's `ai/` namespace, then set in `.env`:
+On a machine where Docker Model Runner is available (for example Apple Silicon with it enabled in Docker Desktop), pull a quantised model of at most 1B parameters from Docker Hub's `ai/` namespace, then in `.env` **delete the `COMPOSE_PROFILES` line** and set:
 
 ```bash
 LLM_URL=http://model-runner.docker.internal/engines/v1
 LLM_MODEL=<the model name as listed by `docker model ls`>
 ```
 
-No code change is needed (REQ-015). The context-window note in step 3 applies here too: the app assumes 4,096 tokens (`LLM_CONTEXT_TOKENS`). Each trace records which backend served the request (`llm.backend`).
+The app assumes a 4,096-token context window (`LLM_CONTEXT_TOKENS`); set it to the model server's actual window if different.
+
+### Ollama installed natively on the host
+
+Supported, but no longer the default (ADR-013, ADR-020). In `.env`, **delete the `COMPOSE_PROFILES` line** and set `LLM_URL=http://host.docker.internal:11434/v1`. Ollama must be started separately, with the same two settings the Compose service sets; for the macOS Ollama app:
+
+```bash
+launchctl setenv OLLAMA_CONTEXT_LENGTH 4096   # pin the context window (TS-005)
+launchctl setenv OLLAMA_NO_CLOUD 1            # disable Ollama's cloud features
+# Quit Ollama from the menu bar and open it again so it picks these up.
+# Both settings are lost on reboot: run the two lines again after restarting the Mac.
+ollama pull gemma3:1b
+ollama run gemma3:1b "hi" >/dev/null && ollama ps   # CONTEXT column must show 4096
+```
+
+### Native Linux (not tested)
+
+- The default setup (Ollama in Compose) should work unchanged: the app reaches Ollama over the Compose network.
+- With a natively installed Ollama: `compose.yaml` maps `host.docker.internal` to the host (`host-gateway`), but Ollama listens on `127.0.0.1` by default, which a container can't reach on Linux. It would have to listen on the Docker bridge address (or `0.0.0.0`, which also exposes it to the network), with `OLLAMA_CONTEXT_LENGTH=4096`.
+- File-change detection doesn't depend on file-system events, so it should behave the same as on macOS (ADR-005).
 
 ## Without Docker (development)
 

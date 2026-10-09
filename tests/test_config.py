@@ -70,9 +70,23 @@ class TestReq013EnvOnly:
 # ---------------------------------------------------------------------------
 
 
+# Read by Docker Compose itself, not by the app (ADR-020); documented in .env.example.
+COMPOSE_ONLY = {"COMPOSE_PROFILES"}
+
+
 class TestReq014EnvExample:
     def test_positive_lists_exactly_the_settings_fields(self):
-        assert set(_env_example()) == {f.name.upper() for f in fields(Settings)}
+        assert set(_env_example()) - COMPOSE_ONLY == {f.name.upper() for f in fields(Settings)}
+
+    def test_positive_default_setup_is_ollama_in_compose(self):
+        # ADR-020: the tested setup (Intel Mac) runs Ollama as a Compose service.
+        example = _env_example()
+        assert example["COMPOSE_PROFILES"] == "ollama"
+        assert example["LLM_URL"] == "http://ollama:11434/v1"
+
+    def test_negative_app_reads_no_compose_variable(self):
+        # The app must not depend on how Compose was started (REQ-013, REQ-022).
+        assert not COMPOSE_ONLY & {f.name.upper() for f in fields(Settings)}
 
     def test_positive_example_values_are_themselves_valid(self):
         # Copying .env.example to .env must give a working configuration.

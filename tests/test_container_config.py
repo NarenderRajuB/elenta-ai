@@ -139,8 +139,10 @@ FIXED_IN_COMPOSE = {
 
 
 def _env_example_names() -> list[str]:
+    # COMPOSE_PROFILES is read by Compose itself, not passed to the app (ADR-020).
     lines = (ROOT / ".env.example").read_text(encoding="utf-8").splitlines()
-    return [line.split("=", 1)[0] for line in lines if line and not line.startswith("#") and "=" in line]
+    names = [line.split("=", 1)[0] for line in lines if line and not line.startswith("#") and "=" in line]
+    return [n for n in names if n != "COMPOSE_PROFILES"]
 
 
 def test_positive_every_env_example_setting_is_passed_from_env():
@@ -207,3 +209,59 @@ def test_negative_jaeger_ui_only_on_loopback_and_otlp_not_published(jaeger_servi
 
 def test_edge_jaeger_hardening(jaeger_service):
     assert jaeger_service["cap_drop"] == ["ALL"] and "no-new-privileges:true" in jaeger_service["security_opt"]
+
+
+# --- Model server in Compose for Intel Macs (ADR-020, REQ-011) -------------------------
+
+
+def _all_services(**env: str) -> dict:
+    result = subprocess.run(
+        ["docker", "compose", "config", "--format", "json"],
+        cwd=ROOT,
+        env={**os.environ, "LLM_URL": "http://h/v1", "LLM_MODEL": "m", **env},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)["services"]
+
+
+@pytest.fixture(scope="module")
+def ollama_service() -> dict:
+    return _all_services(COMPOSE_PROFILES="ollama")["ollama"]
+
+
+def test_positive_ollama_profile_adds_the_model_server():
+    assert sorted(_all_services(COMPOSE_PROFILES="ollama")) == ["app", "jaeger", "ollama"]
+
+
+def test_positive_app_waits_for_a_healthy_model_server_when_enabled():
+    ollama = _all_services(COMPOSE_PROFILES="ollama")["app"]["depends_on"]["ollama"]
+    assert ollama["condition"] == "service_healthy" and ollama["required"] is False
+
+
+def test_positive_ollama_pinned_offline_and_context_matches_the_app(ollama_service):
+    from app.config import DEFAULT_LLM_CONTEXT_TOKENS
+
+    assert ollama_service["image"].startswith("ollama/ollama:0.40.1@sha256:")
+    assert ollama_service["environment"]["OLLAMA_NO_CLOUD"] == "1"
+    assert int(ollama_service["environment"]["OLLAMA_CONTEXT_LENGTH"]) == DEFAULT_LLM_CONTEXT_TOKENS
+    assert ollama_service["healthcheck"]["test"] == ["CMD", "ollama", "list"]
+
+
+def test_negative_no_profile_no_model_server():
+    # Docker Model Runner or native Ollama: Compose must not start a second server.
+    services = _all_services(COMPOSE_PROFILES="")
+    assert "ollama" not in services and sorted(services) == ["app", "jaeger"]
+
+
+def test_negative_ollama_not_published_and_hardened(ollama_service):
+    assert not ollama_service.get("ports")  # reachable only on the Compose network
+    assert ollama_service["cap_drop"] == ["ALL"]
+    assert "no-new-privileges:true" in ollama_service["security_opt"]
+
+
+def test_edge_models_kept_in_a_named_volume(ollama_service):
+    mounts = ollama_service["volumes"]
+    assert [(m["type"], m["source"], m["target"]) for m in mounts] == [("volume", "ollama-models", "/root/.ollama")]

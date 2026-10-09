@@ -81,18 +81,25 @@ run gitleaks-worktree    "REQ-122 secrets" docker run --rm -v "$PWD:/repo:ro" "$
 
 if [ "$OFFLINE" = 1 ]; then
   skip pip-audit           "REQ-122 dependencies" "--offline"
-  skip trivy-images        "REQ-122 container images (app, jaeger)" "--offline"
+  skip trivy-images        "REQ-122 container images (app, jaeger, ollama)" "--offline"
 else
   uv export --frozen --all-groups --no-emit-project --format requirements-txt > "$WORK/requirements.txt"
   run pip-audit          "REQ-122 dependencies" uv run pip-audit --disable-pip --require-hashes -r "$WORK/requirements.txt"
-  # Every image Compose runs is scanned: the app and the Jaeger trace viewer (TS-010).
-  # Each image is exported to a file and scanned from there, so the scanner never gets
-  # access to the Docker socket. The full report lists every finding; the gate fails
-  # only on HIGH/CRITICAL findings that have a fix available (accepted risk: TS-009).
-  scan_image() {  # scan_image <name> <image>
+  # Every image Compose can run is scanned: the app, the Jaeger trace viewer (TS-010) and
+  # the Ollama model server of the `ollama` profile (ADR-020). Each image is exported to a
+  # file and scanned from there, so the scanner never gets access to the Docker socket.
+  # The full report lists every finding; the gate fails only on HIGH/CRITICAL findings
+  # that have a fix available (accepted risk: TS-009). The Ollama image is report-only:
+  # its fixable findings are in the upstream Ollama binary (accepted risk: TS-016).
+  scan_image() {  # scan_image <name> <image> [report-only]
     if docker save "$2" -o "$WORK/$1.tar"; then
       run "trivy-$1-report" "REQ-122 $1 image (all findings)" docker run --rm -v "$WORK:/scan:ro" -v elenta-trivy-cache:/root/.cache/trivy "$TRIVY_IMAGE" image --input "/scan/$1.tar" --scanners vuln --no-progress
-      run "trivy-$1-gate"   "REQ-122 $1 image (fixable HIGH/CRITICAL)" docker run --rm -v "$WORK:/scan:ro" -v elenta-trivy-cache:/root/.cache/trivy "$TRIVY_IMAGE" image --input "/scan/$1.tar" --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1 --no-progress
+      if [ "${3:-}" = "report-only" ]; then
+        skip "trivy-$1-gate" "REQ-122 $1 image" "report only: accepted risk, TS-016"
+      else
+        run "trivy-$1-gate"   "REQ-122 $1 image (fixable HIGH/CRITICAL)" docker run --rm -v "$WORK:/scan:ro" -v elenta-trivy-cache:/root/.cache/trivy "$TRIVY_IMAGE" image --input "/scan/$1.tar" --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1 --no-progress
+      fi
+      rm -f "$WORK/$1.tar"  # the Ollama image alone is several GB
     else
       echo "| trivy-$1 | REQ-122 | **FAIL** (image export) | - |" >> "$SUMMARY"; echo "FAIL  trivy-$1 (image export)"; FAILED=1
     fi
@@ -108,6 +115,12 @@ else
     scan_image jaeger "$JAEGER_IMAGE"
   else
     echo "| trivy-jaeger | REQ-122 | **FAIL** (image not found or pull failed) | - |" >> "$SUMMARY"; echo "FAIL  trivy-jaeger (pull)"; FAILED=1
+  fi
+  OLLAMA_IMAGE="$(sed -n 's/^ *image: *\(ollama\/ollama:.*\)$/\1/p' compose.yaml)"
+  if [ -n "$OLLAMA_IMAGE" ] && docker pull -q "$OLLAMA_IMAGE" > /dev/null; then
+    scan_image ollama "$OLLAMA_IMAGE" report-only
+  else
+    echo "| trivy-ollama | REQ-122 | **FAIL** (image not found or pull failed) | - |" >> "$SUMMARY"; echo "FAIL  trivy-ollama (pull)"; FAILED=1
   fi
 fi
 

@@ -1,5 +1,5 @@
 $ docker run --rm -v /Users/nbongoni/ai-asmt/elenta-ai:/repo:ro zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f dir /repo --redact --no-banner --no-color
-# 2026-10-09T01:11:49Z
+# 2026-10-09T01:51:10Z
 
-1:11AM INF scanned ~1724294 bytes (1.72 MB) in 604ms
-1:11AM INF no leaks found
+1:51AM INF scanned ~1758750 bytes (1.76 MB) in 666ms
+1:51AM INF no leaks found

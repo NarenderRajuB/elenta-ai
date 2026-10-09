@@ -1,5 +1,5 @@
 $ uv run pytest -m container -v
-# 2026-10-09T01:10:47Z
+# 2026-10-09T01:50:15Z
 
 ============================= test session starts ==============================
 platform darwin -- Python 3.12.6, pytest-9.1.1, pluggy-1.6.0 -- /Users/nbongoni/ai-asmt/elenta-ai/.venv/bin/python
@@ -8,7 +8,7 @@ rootdir: /Users/nbongoni/ai-asmt/elenta-ai
 configfile: pyproject.toml
 testpaths: tests
 plugins: platformdirs-4.12.4, anyio-4.15.1
-collecting ... collected 607 items / 592 deselected / 15 selected
+collecting ... collected 615 items / 600 deselected / 15 selected
 
 tests/test_container_runtime.py::test_positive_container_becomes_healthy PASSED [  6%]
 tests/test_container_runtime.py::test_positive_runs_as_non_root_uid_10001 PASSED [ 13%]
@@ -26,4 +26,4 @@ tests/test_container_runtime.py::test_edge_no_linux_capabilities PASSED  [ 86%]
 tests/test_container_runtime.py::test_edge_dev_tools_not_in_image PASSED [ 93%]
 tests/test_container_runtime.py::test_edge_starts_with_no_network_at_all PASSED [100%]
 
-===================== 15 passed, 592 deselected in 58.27s ======================
+===================== 15 passed, 600 deselected in 51.40s ======================

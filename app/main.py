@@ -6,7 +6,8 @@
 #   GET  /healthz  liveness;  GET /readyz  readiness (ADR-015)
 #
 # Owns the lifetime of the shared outbound HTTP client, the corpus store and the index
-# cache. Every response carries security headers; the Content-Security-Policy allows
+# cache. Requests must name this machine (localhost / 127.0.0.1) in their Host header.
+# Every response carries security headers; the Content-Security-Policy allows
 # scripts, styles and connections only from this origin and no inline script, so even
 # if untrusted text reached the page as markup it could not run (REQ-065).
 #
@@ -24,6 +25,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from opentelemetry.sdk.trace.export import SpanExporter
 from pydantic import BaseModel, Field
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.chat import ChatDeps, answer
 from app.config import Settings
@@ -47,6 +49,13 @@ SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
 }
+
+
+# Only requests addressed to this machine by name are served. The port is published on
+# loopback, but a web page on another site could still reach it through DNS rebinding
+# (its own domain re-pointed at 127.0.0.1) and read answers, i.e. corpus content. Such
+# requests carry the attacker's host name, so they are refused with 400 (TS-015).
+ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
 
 
 class ChatRequest(BaseModel):
@@ -91,6 +100,8 @@ def create_app(
     # No interactive API docs: they load scripts from a CDN, which breaks offline
     # operation (REQ-012) and the Content-Security-Policy.
     app = FastAPI(title="ELENTA local chat service", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):

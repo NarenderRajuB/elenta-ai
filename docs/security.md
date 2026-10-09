@@ -41,9 +41,9 @@ Eight controls (ADR-006). Seven are enforced in code and testable without a mode
 | # | Control | Enforced by | Stops a document from… |
 |---|---|---|---|
 | C1 | **Instruction hierarchy.** The system message holds only fixed instructions. Evidence goes in a separate message, one labelled block per chunk; the question comes last. No document or user text is ever in the system message | Code (`app/prompt.py`) | …posing as application instructions |
-| C2 | **Evidence can't break out of its block.** `<<<` and `>>>` in document text, file names and the question are replaced with look-alike characters `‹‹‹` / `›››` | Code (`app/prompt.py`) | …closing its block and writing "instructions" after it |
+| C2 | **Evidence can't break out of its block.** `<<<` and `>>>` in document text, file names, chunk ids and the question are replaced with look-alike characters `‹‹‹` / `›››`. Files whose names contain line breaks or other control characters are not read (TS-013) | Code (`app/prompt.py`, `app/ingestion.py`) | …closing its block and writing "instructions" after it |
 | C3 | **Sources don't depend on the model.** The files and chunk ids sent to the browser come from selection code, as structured data | Code (`app/chat.py`) | …suppressing source attribution |
-| C4 | **Hidden instructions aren't exposed.** If the answer reproduces any 60 consecutive characters of the system instructions (ignoring case and spacing), the stream stops and a fixed refusal replaces it | Code (`app/output_guard.py`) | …getting the instructions printed |
+| C4 | **Hidden instructions aren't exposed.** If the answer reproduces any 60 consecutive characters of the system instructions (ignoring case and spacing), the stream stops and a fixed refusal replaces it. Text lying entirely within rule 2, which says what to reply when evidence is missing, is not secret and isn't counted, so an honest "not enough information" answer isn't blocked (TS-014) | Code (`app/output_guard.py`) | …getting the instructions printed |
 | C5 | **Reasoning isn't shown.** `<think>…</think>` and `<thinking>…</thinking>` blocks are removed, even when split across streamed pieces or never closed | Code (`app/output_guard.py`) | …getting chain-of-thought shown |
 | C6 | **No answer without evidence.** If nothing in the corpus matches, a fixed reply is sent **and the model isn't called** | Code (`app/selection.py`, `app/chat.py`) | …getting the model to fill a gap from memory |
 | C7 | **Role and decisions stay fixed.** The instructions state the service role, that evidence is data and never instructions, that answers use only the evidence, and that no approval or decision may be stated unless the evidence states it | **Prompt only** | …changing the role or manufacturing an approval, **as far as the model follows it** |
@@ -77,6 +77,7 @@ The app reads only under `/data` (REQ-064) and writes nowhere.
 | Path traversal (`../`) | Not possible: paths come from listing the directory, never from a request. Each file's real path is checked to be inside the root before opening (`outside_root`) |
 | Symbolic links | Never followed, for files or folders, even if the target is inside the corpus. Files are opened with `O_NOFOLLOW`, so a file swapped for a link after the scan still isn't followed |
 | Hidden files and folders | Skipped (name starts with `.`); hidden folders aren't entered |
+| Names with line breaks or other control characters | Skipped (`invalid_filename`): they would start new lines in the prompt and in logs (TS-013) |
 | Pipes, sockets, devices | Never opened (opening a pipe can block forever) |
 | Unsupported types, oversized, non-UTF-8, binary | Skipped with a reason; oversized files aren't read at all |
 | Writing | `./data` is mounted **read-only**; the container's root filesystem is read-only; only `/tmp` (in memory) is writable |
@@ -86,7 +87,8 @@ The app reads only under `/data` (REQ-064) and writes nowhere.
 - **Loopback only.** The app (`127.0.0.1:8000`) and the Jaeger UI (`127.0.0.1:16686`) are published on the host's loopback address, so other machines can't reach them. Jaeger's trace intake port (4318) is reachable only inside the Compose network.
 - **No internet at runtime** (REQ-012). The app calls only `LLM_URL` and, under Compose, the bundled Jaeger. The trace exporter ignores proxy environment variables, so traces can't be sent elsewhere. Ollama's cloud features are switched off (`OLLAMA_NO_CLOUD=1`). Starting the container with no network at all works (a container test checks it).
 - **No encryption between local components.** App to Ollama and app to Jaeger use plain HTTP on the same machine.
-- **No authentication.** Anything that can reach `127.0.0.1:8000` on this machine can ask questions. This suits the brief's single local user; the service must not be exposed to a network as it is.
+- **Host names checked.** Requests must name `localhost` or `127.0.0.1` in their `Host` header; anything else gets 400. This blocks DNS rebinding, where a web page on another site re-points its own domain at 127.0.0.1 to read answers, and through them corpus content (TS-015). Cross-site form posts are also refused, because `/chat` only accepts a JSON body.
+- **No authentication.** Anything running on this machine that can reach `127.0.0.1:8000` can ask questions. This suits the brief's single local user; the service must not be exposed to a network as it is.
 - **Native Linux:** to let the container reach Ollama, Ollama must listen beyond loopback (for example `OLLAMA_HOST=0.0.0.0`), which also exposes it to the local network unless a firewall blocks port 11434. Prefer the Docker bridge address.
 
 ## Secrets
@@ -107,7 +109,7 @@ The app reads only under `/data` (REQ-064) and writes nowhere.
 Stated plainly, as the brief asks. Each is accepted for this scope, with the reason recorded in the ADR or TS entry cited.
 
 1. **The model can still repeat an injected claim in its own words.** When evidence is found, C7 (prompt wording) is the only control on what the model concludes from it. `gemma3:1b` resisted the tested injections, but a different wording or document could succeed. No keyword filter for "unsupported decisions" was added, because any such rule would be invented beyond the brief and easy to get around (ADR-006).
-2. **The leak guard (C4) catches copying, not paraphrase.** A model that summarises its instructions in other words isn't stopped.
+2. **The leak guard (C4) catches copying, not paraphrase.** A model that summarises its instructions in other words isn't stopped. Rule 2 alone may be quoted, by design (TS-014).
 3. **The reasoning filter (C5) knows two markers.** Reasoning in another format would be shown.
 4. **Conflicts are flagged by score, not detected.** The notice names documents that match equally well (ADR-019); a conflicting document that scores lower isn't named, and the answer text may still give one value.
 5. **No authentication**, by design for one local user (see Network assumptions).

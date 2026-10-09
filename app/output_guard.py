@@ -48,6 +48,10 @@ class GuardEvents:
 @dataclass
 class OutputGuard:
     system_prompt: str
+    # Parts of the system prompt that are not secret and may appear in an honest answer
+    # (e.g. the rule saying what to reply when evidence is missing). A window lying
+    # entirely inside one of them is not treated as a leak (TS-014).
+    quotable: tuple[str, ...] = ()
     events: GuardEvents = field(default_factory=GuardEvents)
     _pending: str = ""  # received, not yet classified as answer or reasoning
     _answer: str = ""  # classified as answer, not all released yet
@@ -60,7 +64,11 @@ class OutputGuard:
     def __post_init__(self) -> None:
         norm = _normalise(self.system_prompt)
         self._prompt_norm = norm
-        self._windows = frozenset(norm[i : i + LEAK_WINDOW] for i in range(len(norm) - LEAK_WINDOW + 1))
+        windows = {norm[i : i + LEAK_WINDOW] for i in range(len(norm) - LEAK_WINDOW + 1)}
+        for text in self.quotable:
+            q = _normalise(text)
+            windows -= {q[i : i + LEAK_WINDOW] for i in range(len(q) - LEAK_WINDOW + 1)}
+        self._windows = frozenset(windows)
 
     @property
     def blocked(self) -> bool:

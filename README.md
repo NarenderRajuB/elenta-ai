@@ -228,7 +228,7 @@ Run a single requirement's tests, for example:
 uv run pytest -v tests/test_config.py::TestReq016FailFast
 ```
 
-Current result: **561 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Test-only dev dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The other dev tools are listed below. The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
+Current result: **592 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Test-only dev dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The other dev tools are listed below. The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
 
 ## Code quality and security checks (REQ-120..123)
 
@@ -281,7 +281,7 @@ Every variable, its accepted values, the rules that combine them and the four th
 | `not_utf8` | error | Not valid UTF-8 |
 | `binary_content` | error | Contains NUL bytes |
 | `unreadable` | error | Permission denied or I/O error (file or directory) |
-| `invalid_filename` | error | Name is not valid UTF-8 |
+| `invalid_filename` | error | Name is not valid UTF-8, or contains control characters (line breaks, tabs, escape codes) |
 | `outside_root` | error | Real path resolves outside the corpus root |
 | `corpus_dir_missing` | error | Corpus root vanished at runtime; empty corpus served |
 
@@ -519,6 +519,8 @@ Tests: `tests/test_corpus.py::TestReq056CorruptFiles`
 | ⚠️ | Logging | One WARNING per error skip, with path and reason only; no content |
 | ⚠️ | Policy skips (`.gitkeep`, `.pdf`) | Not logged as warnings |
 | ⚠️ | Non-UTF-8 filename | Detected (`invalid_filename`) |
+| ❌ | Filename with a line break, tab, escape code or DEL | Skipped `invalid_filename`; other files still served (TS-013) |
+| ⚠️ | Accented, CJK, spaces or brackets in the name | Served |
 
 ### REQ-064: Reads restricted to the corpus root
 Tests: `tests/test_corpus.py::TestReq064Boundary`
@@ -662,7 +664,8 @@ Code: `app/prompt.py` · Tests: `tests/test_prompt.py::TestC1InstructionHierarch
 | ✅ | Forged `END EVIDENCE … SYSTEM: …` inside a document | Only one real open and close marker; forged ones neutralised |
 | ❌ | Injection text ("You are now FinanceBot…") | Only in the evidence message, never in `system` |
 | ❌ | Question "You are now QX-SUPERUSER-7…" | Only in the question message |
-| ❌ | Markers in question or file name | Neutralised |
+| ❌ | Markers in question or file name | Neutralised, in both `source=` and the chunk `id=` (TS-013) |
+| ❌ | File name crafted to close its header and add `SYSTEM:` text | Still exactly one open and one close marker |
 | ⚠️ | Two different requests | Identical `system` message |
 | ⚠️ | Truncated chunk | `truncated="true"` on its block |
 | ⚠️ | No evidence | Still three well-formed messages |
@@ -675,6 +678,9 @@ Tests: `tests/test_prompt.py::TestC7SystemPromptContent`, `::TestC4InstructionLe
 |---|---|---|
 | ✅ | Each §5.5/§5.6 rule present in the instructions | 7 phrases asserted |
 | ✅ | Normal answers incl. "The documents do not contain enough information…" | Not blocked |
+| ✅ | Six honest "not enough information" phrasings, incl. "The evidence does not contain enough information to answer, …" | Not blocked (TS-014) |
+| ❌ | Same honest reply with the bare guard (no quotable rule) | Blocked: why `QUOTABLE_RULES` exists |
+| ⚠️ | Rule 2 quoted alone / whole prompt / a run crossing rules 1–2 | Passes / blocked / blocked |
 | ❌ | Answer quotes 250 characters of the instructions | Blocked; none of the leaked window sent |
 | ❌ | Leak hidden in one 10,000-character chunk | Blocked |
 | ❌ | Leak in upper case with extra spaces | Blocked |
@@ -813,6 +819,9 @@ Code: `app/static/` · Tests: `tests/test_ui.py`
 | ❌ | `/docs`, `/openapi.json` | 404 (would load CDN scripts) |
 | ⚠️ | `/static/../config.py`, `%2e%2e` | 404 |
 | ⚠️ | Stop button | Aborts the fetch |
+| ✅ | `Host: localhost` or `127.0.0.1` (with or without port) | Served |
+| ❌ | `Host: attacker.example` on `/`, `/healthz`, static files or `/chat` | 400, nothing streamed (DNS rebinding, TS-015) |
+| ⚠️ | Look-alike or empty host (`localhost.attacker.example`, `127.0.0.1.nip.io`, `0.0.0.0`, empty) | 400 |
 
 ### Inference timeouts (REQ-013 / REQ-016)
 Tests: `tests/test_config.py::TestInferenceTimeouts`

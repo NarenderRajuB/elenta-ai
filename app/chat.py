@@ -44,7 +44,7 @@ from app.index import IndexCache
 from app.inference import Finish, InferenceError, TextDelta, Usage, stream_chat
 from app.observability import REQUEST_ID, llm_backend_attributes
 from app.output_guard import REFUSAL, OutputGuard
-from app.prompt import PromptTooLarge, assemble
+from app.prompt import QUOTABLE_RULES, PromptTooLarge, assemble
 from app.selection import select
 from app.tokens import METHOD as TOKEN_METHOD
 from app.tokens import estimate_tokens
@@ -270,7 +270,7 @@ async def answer(question: str, deps: ChatDeps) -> AsyncIterator[dict]:
         )
         end(span)
 
-        guard = OutputGuard(prompt.messages[0]["content"])
+        guard = OutputGuard(prompt.messages[0]["content"], QUOTABLE_RULES)
         usage: Usage | None = None
         finish_reason = "unknown"
         emitted_chars = 0

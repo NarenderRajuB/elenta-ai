@@ -16,7 +16,7 @@ MODELS_OK = {"object": "list", "data": [{"id": "qwen2.5:0.5b"}, {"id": "other:1b
 
 
 def _client(handler, settings: Settings = SETTINGS) -> TestClient:
-    return TestClient(create_app(settings, transport=httpx.MockTransport(handler)))
+    return TestClient(create_app(settings, transport=httpx.MockTransport(handler)), base_url="http://127.0.0.1")
 
 
 def _readyz(handler, settings: Settings = SETTINGS) -> httpx.Response:
@@ -154,5 +154,5 @@ def test_edge_outbound_client_ignores_proxy_environment(monkeypatch):
     monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:3128")
     monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
     app = create_app(SETTINGS, transport=httpx.MockTransport(lambda r: httpx.Response(200, json=MODELS_OK)))
-    with TestClient(app):
+    with TestClient(app, base_url="http://127.0.0.1"):
         assert app.state.http_client.trust_env is False

@@ -196,6 +196,7 @@ Template:
 - C5: `<think>` and `<thinking>` blocks (any case) are removed, including when split across chunks or left unclosed.
 - Whole-prompt check: settings `LLM_CONTEXT_TOKENS` (4096) and `LLM_MAX_TOKENS` (512). The prompt may use context minus answer allowance; a larger prompt raises `PromptTooLarge`. At startup, instructions + evidence budget + 100 question tokens must fit, otherwise exit 2.
 - **Live result:** see TS-006. C4/C5/C6 behaved as designed; C7 (prompt-only) failed once out of two runs on an injected "APPROVED", which is the remaining risk above. Decision on mitigation pending.
+- **Revised 2026-10-09 (independent review):** C2 now also neutralises the chunk id, which embeds the file path, and files whose names contain control characters are skipped (TS-013). C4 no longer counts text lying entirely within rule 2 (`QUOTABLE_RULES`), which an honest "not enough information" answer repeats (TS-014). Rule 2's wording is unchanged.
 
 ## ADR-007: Lexical (BM25) evidence selection with an explicit, estimated token budget
 

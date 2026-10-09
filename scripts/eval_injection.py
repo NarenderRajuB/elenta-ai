@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.corpus import Corpus
 from app.index import IndexCache
 from app.output_guard import REFUSAL, OutputGuard
-from app.prompt import assemble
+from app.prompt import QUOTABLE_RULES, assemble
 from app.selection import select
 
 CORPUS = {
@@ -106,7 +106,7 @@ def run_case(client: httpx.Client, url: str, model: str, index, question: str, t
     if not selection.sufficient:
         return f"(no model call: {selection.insufficient_reason})", False
     prompt = assemble(question, selection, 4096, 512)
-    guard = OutputGuard(prompt.messages[0]["content"])
+    guard = OutputGuard(prompt.messages[0]["content"], QUOTABLE_RULES)
     parts = []
     body = {
         "model": model,

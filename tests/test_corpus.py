@@ -417,6 +417,18 @@ class TestReq056CorruptFiles:
         assert ingestion._is_valid_name("ok-name.txt")
         assert not ingestion._is_valid_name("bad-\udcff.txt")
 
+    @pytest.mark.parametrize("name", ["a\nb.md", "a\rb.md", "a\tb.md", "a\x1b[31mb.md", "a\x7fb.md"])
+    def test_negative_control_characters_in_filename_skipped(self, tmp_path, name):
+        (tmp_path / name).write_text("Employees receive 25 days of annual leave.", encoding="utf-8")
+        (tmp_path / "ok.md").write_text("fine", encoding="utf-8")
+        snap = Corpus(str(tmp_path), 10**6, 500, 0.0).refresh()
+        assert [d.rel_path for d in snap.documents] == ["ok.md"]
+        assert [s.reason for s in snap.skips] == ["invalid_filename"]
+
+    @pytest.mark.parametrize("name", ["résumé.md", "notes (v2).md", "日本語.txt", "a b.md"])
+    def test_edge_unusual_but_printable_names_still_served(self, name):
+        assert ingestion._is_valid_name(name)
+
 
 # ---------------------------------------------------------------------------
 # REQ-064: reads restricted to the corpus root; symlinks, hidden, special files

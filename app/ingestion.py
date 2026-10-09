@@ -91,7 +91,11 @@ def _fingerprint(st: os.stat_result) -> Fingerprint:
 
 def _is_valid_name(name: str) -> bool:
     # Undecodable bytes in a filename surface as lone surrogates; such a name cannot be
-    # shown, logged or cited reliably, so the file is skipped.
+    # shown, logged or cited reliably, so the file is skipped. So is a name containing
+    # control characters (line breaks, tabs, escape codes...): it would start new lines
+    # inside the prompt's evidence header and in log output (ADR-006 C2).
+    if any(ch < " " or ch == "\x7f" for ch in name):
+        return False
     try:
         name.encode("utf-8")
     except UnicodeEncodeError:

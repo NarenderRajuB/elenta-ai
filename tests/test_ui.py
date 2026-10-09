@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import load_settings
-from app.main import SECURITY_HEADERS, create_app
+from app.main import ALLOWED_HOSTS, SECURITY_HEADERS, create_app
 
 STATIC = Path(__file__).resolve().parent.parent / "app" / "static"
 APP_JS = (STATIC / "app.js").read_text(encoding="utf-8")
@@ -26,7 +26,7 @@ INDEX = (STATIC / "index.html").read_text(encoding="utf-8")
 def client(tmp_path):
     settings = load_settings({"LLM_URL": "http://llm.test/v1", "LLM_MODEL": "gemma3:1b", "CORPUS_DIR": str(tmp_path)})
     app = create_app(settings, transport=httpx.MockTransport(lambda r: httpx.Response(503)))
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://127.0.0.1") as c:
         yield c
 
 
@@ -122,3 +122,31 @@ def test_edge_stop_button_aborts_request():
 
 def test_edge_answer_box_preserves_line_breaks_without_markup():
     assert "white-space: pre-wrap" in (STATIC / "style.css").read_text(encoding="utf-8")
+
+
+# --- Host header: DNS rebinding (TS-015) ---------------------------------------------
+
+
+@pytest.mark.parametrize("host", ["localhost", "127.0.0.1", "localhost:8000", "127.0.0.1:8000"])
+def test_positive_local_host_names_served(client, host):
+    assert client.get("/healthz", headers={"Host": host}).status_code == 200
+
+
+@pytest.mark.parametrize("path", ["/", "/healthz", "/static/app.js"])
+def test_negative_foreign_host_refused(client, path):
+    # A rebinding attack reaches 127.0.0.1 under the attacker's own domain name.
+    assert client.get(path, headers={"Host": "attacker.example"}).status_code == 400
+
+
+def test_negative_foreign_host_cannot_ask_questions(client):
+    response = client.post("/chat", json={"question": "annual leave"}, headers={"Host": "attacker.example"})
+    assert response.status_code == 400 and "event:" not in response.text
+
+
+@pytest.mark.parametrize("host", ["localhost.attacker.example", "127.0.0.1.nip.io", "0.0.0.0", ""])
+def test_edge_look_alike_and_empty_hosts_refused(client, host):
+    assert client.get("/healthz", headers={"Host": host}).status_code == 400
+
+
+def test_edge_allowed_hosts_are_exactly_the_loopback_names():
+    assert ALLOWED_HOSTS == ["localhost", "127.0.0.1"]

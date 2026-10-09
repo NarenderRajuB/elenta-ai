@@ -75,7 +75,7 @@ def ask(tmp_path: Path, files: dict[str, str | bytes], question: str, upstream: 
         path = tmp_path / name
         path.write_bytes(content if isinstance(content, bytes) else content.encode())
     app = create_app(settings_for(tmp_path, **extra), transport=httpx.MockTransport(upstream))
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         response = client.post("/chat", json={"question": question})
     return response, (
         parse(response.text) if response.headers.get("content-type", "").startswith("text/event-stream") else None
@@ -337,7 +337,7 @@ class TestValidation:
     def test_negative_invalid_requests_rejected_before_streaming(self, tmp_path, payload, status):
         up = Upstream(lambda r: httpx.Response(200, content=sse_body("x")))
         app = create_app(settings_for(tmp_path), transport=httpx.MockTransport(up))
-        with TestClient(app) as client:
+        with TestClient(app, base_url="http://127.0.0.1") as client:
             response = client.post("/chat", json=payload)
         assert response.status_code == status and up.requests == []
 

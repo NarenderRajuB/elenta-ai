@@ -73,7 +73,7 @@ A bad file never takes down the service or the rest of the corpus (REQ-056, ADR-
 | Over 50 MB | `too_large` (not read at all) | Yes |
 | Beyond 500 files | `file_limit_exceeded` | Yes |
 | Permission denied or read error | `unreadable` | Yes |
-| Name not valid UTF-8 | `invalid_filename` | Yes |
+| Name not valid UTF-8, or contains control characters (line breaks, tabs…) | `invalid_filename` | Yes |
 | Resolves outside `/data` | `outside_root` | Yes |
 | Not `.txt`/`.md`; hidden; symlink; pipe or device; empty | `unsupported_type`, `hidden`, `symlink`, `not_regular_file`, `empty` | No (policy, logged only) |
 | `./data` itself gone | `corpus_dir_missing`: empty corpus, app keeps running | Yes |

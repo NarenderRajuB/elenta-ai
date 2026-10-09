@@ -64,7 +64,7 @@ def run_chat(tmp_path: Path, question: str, respond, files=None, llm_url="http:/
         return respond(request)
 
     app = create_app(settings, transport=httpx.MockTransport(handler), span_exporter=exporter)
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         body = client.post("/chat", json={"question": question}).text
     # Leaving the TestClient shuts the provider down, which flushes all spans.
     spans = {s.name: s for s in exporter.get_finished_spans()}
@@ -110,7 +110,7 @@ class TestTraceStructure:
             transport=httpx.MockTransport(lambda r: httpx.Response(200, content=sse("ok"))),
             span_exporter=exporter,
         )
-        with TestClient(app) as client:
+        with TestClient(app, base_url="http://127.0.0.1") as client:
             client.post("/chat", json={"question": "annual leave"})
             client.post("/chat", json={"question": "annual leave"})
         roots = [s for s in exporter.get_finished_spans() if s.name == "chat.request"]
@@ -252,7 +252,7 @@ class TestFailureTraces:
             transport=httpx.MockTransport(lambda r: httpx.Response(200, content=sse("x"))),
             span_exporter=exporter,
         )
-        with TestClient(app) as client:
+        with TestClient(app, base_url="http://127.0.0.1") as client:
             client.post("/chat", json={"question": "annual leave " + "why " * 1700})
         spans = {s.name: s for s in exporter.get_finished_spans()}
         assert spans["prompt.assembly"].attributes["error.code"] == "question_too_long"

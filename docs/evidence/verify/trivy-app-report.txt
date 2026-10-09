@@ -1,12 +1,12 @@
-$ docker run --rm -v /var/folders/r0/d_cqdn6n6n72h2gpccr7vkfh0000gn/T/tmp.mY9ov7SXmj:/scan:ro -v elenta-trivy-cache:/root/.cache/trivy aquasec/trivy@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa image --input /scan/app.tar --scanners vuln --no-progress
-# 2026-10-09T01:51:18Z
+$ docker run --rm -v /var/folders/r0/d_cqdn6n6n72h2gpccr7vkfh0000gn/T/tmp.OCv3MXkTGA:/scan:ro -v elenta-trivy-cache:/root/.cache/trivy aquasec/trivy@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa image --input /scan/app.tar --scanners vuln --no-progress
+# 2026-10-09T10:46:50Z
 
-2026-10-09T01:51:19Z	INFO	[vuln] Vulnerability scanning is enabled
-2026-10-09T01:51:19Z	INFO	Detected OS	family="debian" version="13.7"
-2026-10-09T01:51:19Z	INFO	[debian] Detecting vulnerabilities...	os_version="13" pkg_num=87
-2026-10-09T01:51:19Z	INFO	Number of language-specific files	num=1
-2026-10-09T01:51:19Z	INFO	[python-pkg] Detecting vulnerabilities...
-2026-10-09T01:51:19Z	WARN	Using severities from other vendors for some vulnerabilities. Read https://trivy.dev/docs/v0.75/guide/scanner/vulnerability#severity-selection for details.
+2026-10-09T10:46:51Z	INFO	[vuln] Vulnerability scanning is enabled
+2026-10-09T10:46:51Z	INFO	Detected OS	family="debian" version="13.7"
+2026-10-09T10:46:51Z	INFO	[debian] Detecting vulnerabilities...	os_version="13" pkg_num=87
+2026-10-09T10:46:51Z	INFO	Number of language-specific files	num=1
+2026-10-09T10:46:51Z	INFO	[python-pkg] Detecting vulnerabilities...
+2026-10-09T10:46:51Z	WARN	Using severities from other vendors for some vulnerabilities. Read https://trivy.dev/docs/v0.75/guide/scanner/vulnerability#severity-selection for details.
 
 Report Summary
 

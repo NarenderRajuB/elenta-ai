@@ -441,3 +441,17 @@ With a 1B model, small wording changes had large, unpredictable effects, so the 
 **Verified.** 30 new tests; with the fixes removed, 19 fail. Live through the app with Ollama in Compose: answers still complete normally (`finish_reason: stop`; Ollama sends both signals); the 180-document question is answered with 1,485 of 1,500 tokens used and 136 chunks dropped.
 
 **Remaining limitation.** Without a traceback in the logs, an unexpected bug is harder to diagnose; the class and location are logged, and the request can be reproduced.
+
+---
+
+## TS-019: Splitting a long paragraph took quadratic time
+
+- **Date:** 2026-10-09
+- **Phase:** External review report (finding R3)
+- **Related:** REQ-041, REQ-042, ADR-007
+
+**Symptom.** Chunking one long paragraph slowed down about fourfold or more each time its size doubled. Measured here: 1 MiB 0.10 s, 2 MiB 0.77 s, 4 MiB 5.2 s. The default limits allow 50 MB files, and the index is rebuilt under a lock, so one such file would stall every question for minutes while it was indexed.
+
+**Diagnosis.** `_split_long` in `app/chunking.py` did `rest = rest[cut:].strip()` on every step, copying the whole remaining paragraph each time: total work proportional to the square of the paragraph's length.
+
+**Resolution.** The function walks the paragraph with an index and copies only the piece being produced. Output unchanged: a test compares it with the previous implementation (kept in the test file) on 2,100 generated paragraphs over seven chunk sizes, including words longer than the chunk size and mixed spaces, tabs and line breaks. Measured after: 4 MiB 0.021 s, 8 MiB 0.042 s, 50 MiB 0.27 s (same chunk counts as before: 1,314, 2,629, 5,257, 10,513 for 1–8 MiB). A timing test (4 MiB under 1 s) fails against the old code and passes against the new.

@@ -3,10 +3,13 @@
 #
 # Organised by requirement with positive / negative / edge cases; mirrored in README.md.
 
+import random
+import time
 from pathlib import Path
 
 import pytest
 
+from app import chunking
 from app.chunking import chunk_document, chunk_text
 from app.corpus import Corpus
 from app.index import STOP_WORDS, Bm25Index, IndexCache, query_terms
@@ -409,3 +412,70 @@ class TestBudgetIncludesFraming:
         evidence = assemble("annual leave", sel, 4096, 512).messages[1]["content"]
         header = evidence.split("\n\n", 1)[0]
         assert estimate_tokens(evidence) <= estimate_tokens(header) + sel.used_tokens
+
+
+# ---------------------------------------------------------------------------
+# Long-paragraph splitting: same output as before, linear time (TS-019)
+# ---------------------------------------------------------------------------
+
+
+def _reference_split_long(paragraph: str, max_chars: int) -> list[str]:
+    # The implementation before TS-019 (quadratic), kept to prove the output is unchanged.
+    pieces = []
+    rest = paragraph
+    while len(rest) > max_chars:
+        cut = rest.rfind(" ", 0, max_chars + 1)
+        cut = max(cut, rest.rfind("\n", 0, max_chars + 1))
+        if cut <= 0:
+            cut = max_chars
+        pieces.append(rest[:cut].strip())
+        rest = rest[cut:].strip()
+    if rest:
+        pieces.append(rest)
+    return pieces
+
+
+def _random_paragraph(rng: random.Random) -> str:
+    words = []
+    for _ in range(rng.randint(0, 120)):
+        word = "x" * rng.choice([1, 2, 3, 5, 8, 13, 40, 90])  # includes words longer than max_chars
+        words.append(word + rng.choice([" ", "  ", "\n", " \n ", "\t", " \t "]))
+    return "".join(words).strip()
+
+
+class TestLongParagraphSplitting:
+    @pytest.mark.parametrize("max_chars", [1, 2, 5, 10, 17, 50, 800])
+    def test_positive_same_pieces_as_the_previous_implementation(self, max_chars):
+        rng = random.Random(max_chars)  # fixed seed: repeatable
+        for _ in range(300):
+            paragraph = _random_paragraph(rng)
+            assert chunking._split_long(paragraph, max_chars) == _reference_split_long(paragraph, max_chars), paragraph
+
+    def test_positive_linear_time_for_a_long_paragraph(self):
+        # External review R3: 4 MiB took about 5 s here before (quadratic); now ~0.02 s.
+        text = "policy " * (4 * 1024 * 1024 // 7)
+        started = time.perf_counter()
+        chunks = chunk_text(text, 800)
+        assert time.perf_counter() - started < 1.0
+        assert len(chunks) == 5257 and all(len(c) <= 800 for c in chunks)
+
+    def test_negative_no_piece_exceeds_the_limit_and_nothing_is_lost(self):
+        rng = random.Random(7)
+        for _ in range(200):
+            paragraph = _random_paragraph(rng)
+            pieces = chunking._split_long(paragraph, 10)
+            assert all(len(p) <= 10 for p in pieces)
+            assert "".join("".join(pieces).split()) == "".join(paragraph.split())
+
+    @pytest.mark.parametrize(
+        "paragraph, max_chars, expected",
+        [
+            ("", 10, []),
+            ("short", 10, ["short"]),
+            ("x" * 25, 10, ["x" * 10, "x" * 10, "x" * 5]),  # hard cuts, no whitespace
+            ("aaaa bbbb", 4, ["aaaa", "bbbb"]),  # cut exactly at the limit
+            ("a\n\t  b", 1, ["a", "b"]),  # whitespace runs skipped between pieces
+        ],
+    )
+    def test_edge_cases(self, paragraph, max_chars, expected):
+        assert chunking._split_long(paragraph, max_chars) == expected == _reference_split_long(paragraph, max_chars)

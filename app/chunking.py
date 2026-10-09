@@ -34,17 +34,22 @@ class Chunk:
 
 
 def _split_long(paragraph: str, max_chars: int) -> list[str]:
+    # Walks the paragraph with an index and copies only the piece being produced, so
+    # the work grows linearly with its length. (Re-slicing the remaining text on every
+    # step copied it each time: quadratic, 5 s for a 4 MiB paragraph, TS-019.)
     pieces = []
-    rest = paragraph
-    while len(rest) > max_chars:
-        cut = rest.rfind(" ", 0, max_chars + 1)
-        cut = max(cut, rest.rfind("\n", 0, max_chars + 1))
-        if cut <= 0:
-            cut = max_chars  # no whitespace: hard cut (e.g. a long URL or token run)
-        pieces.append(rest[:cut].strip())
-        rest = rest[cut:].strip()
-    if rest:
-        pieces.append(rest)
+    start, end = 0, len(paragraph)
+    while end - start > max_chars:
+        window = start + max_chars + 1
+        cut = max(paragraph.rfind(" ", start, window), paragraph.rfind("\n", start, window))
+        if cut <= start:
+            cut = start + max_chars  # no whitespace: hard cut (e.g. a long URL or token run)
+        pieces.append(paragraph[start:cut].strip())
+        start = cut
+        while start < end and paragraph[start].isspace():
+            start += 1
+    if start < end:
+        pieces.append(paragraph[start:end].strip())
     return pieces
 
 

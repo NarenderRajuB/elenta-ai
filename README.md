@@ -218,7 +218,7 @@ Run a single requirement's tests, for example:
 uv run pytest -v tests/test_config.py::TestReq016FailFast
 ```
 
-Current result: **683 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Test-only dev dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The other dev tools are listed below. The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
+Current result: **697 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Test-only dev dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The other dev tools are listed below. The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
 
 ## Code quality and security checks (REQ-120..123)
 
@@ -642,6 +642,16 @@ Code: `app/selection.py` (`framing_tokens`), `app/prompt.py` (`block_framing_tok
 | ❌ | Budget smaller than one chunk's label | `evidence_too_large`, fixed reply, model not called |
 | ⚠️ | Best chunk over budget | Truncated so text plus label fit |
 | ⚠️ | 30 chunks in nested folders | Assembled evidence never larger than the counted budget |
+
+### Long paragraphs split in linear time (TS-019)
+Code: `app/chunking.py` (`_split_long`) · Tests: `tests/test_selection.py::TestLongParagraphSplitting`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | 2,100 generated paragraphs, 7 chunk sizes | Same pieces as the previous implementation |
+| ✅ | 4 MiB single paragraph (external review R3) | Under 1 s (was about 5 s); 5,257 chunks of at most 800 characters |
+| ❌ | Any input | No piece over the limit; no text lost |
+| ⚠️ | Empty, short, no whitespace, cut exactly at the limit, whitespace runs | Same as before |
 
 ### Token estimation (REQ-083, estimate side)
 Tests: `tests/test_selection.py::TestTokenEstimate`

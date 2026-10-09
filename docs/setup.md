@@ -20,7 +20,7 @@ Hardware: the model needs about 1 GB of memory; it runs on CPU. The first token 
 ## 2. Get the code
 
 ```bash
-git clone <repository URL> elenta-ai
+git clone https://github.com/NarenderRajuB/elenta-ai.git
 cd elenta-ai
 ```
 

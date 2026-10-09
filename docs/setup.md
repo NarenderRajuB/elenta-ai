@@ -135,14 +135,40 @@ The model server is chosen in `.env` only; no code or Compose change (REQ-015, A
 
 ### Docker Model Runner (not tested)
 
-On a machine where Docker Model Runner is available (for example Apple Silicon with it enabled in Docker Desktop), pull a quantised model of at most 1B parameters from Docker Hub's `ai/` namespace, then in `.env` **delete the `COMPOSE_PROFILES` line** and set:
+For an **Apple Silicon Mac** (or any machine where Docker Model Runner is available). No code or Compose change is needed: only Docker Desktop settings and `.env` (REQ-015, ADR-020). Not tested here: the development machine is an Intel Mac, where Docker Model Runner is unavailable (TS-001).
 
-```bash
-LLM_URL=http://model-runner.docker.internal/engines/v1
-LLM_MODEL=<the model name as listed by `docker model ls`>
-```
+1. **Enable Docker Model Runner:** Docker Desktop → Settings → AI → *Enable Docker Model Runner*.
+2. **Pull the model.** `ai/gemma3:1b-q4_K_M` on Docker Hub is the same 1B model at the same Q4_K_M quantisation used in the Ollama setups:
 
-The app assumes a 4,096-token context window (`LLM_CONTEXT_TOKENS`); set it to the model server's actual window if different.
+   ```bash
+   docker model pull ai/gemma3:1b-q4_K_M
+   docker model ls          # note the exact model name it lists
+   ```
+
+3. **Set the context window to 4,096 tokens**, which the app's token budget assumes (TS-005):
+
+   ```bash
+   docker model configure --context-size 4096 ai/gemma3:1b-q4_K_M
+   ```
+
+   If your Docker version has no such option, set `LLM_CONTEXT_TOKENS` in `.env` to the model's actual context window instead (and keep the rules in [Configuration](configuration.md#rules-that-combine-settings)).
+4. **Edit `.env`:** delete the `COMPOSE_PROFILES` line (so the Ollama container isn't started) and set:
+
+   ```bash
+   LLM_URL=http://model-runner.docker.internal/engines/v1
+   LLM_MODEL=ai/gemma3:1b-q4_K_M     # exactly as `docker model ls` shows it
+   ```
+
+5. **Start and check:**
+
+   ```bash
+   docker compose up -d --build        # app + Jaeger; the app image builds natively for arm64
+   curl -i http://127.0.0.1:8000/readyz
+   ```
+
+   `ready` means the app reaches Docker Model Runner and finds the model. `model_not_found` means `LLM_MODEL` doesn't exactly match the listed name; `unreachable` means Docker Model Runner isn't enabled.
+
+Each trace records `llm.backend=docker-model-runner`. Answers can differ slightly from the Intel Mac at temperature 0 (TS-017); the code-level controls (C1–C6, C8, C9) behave the same on any backend.
 
 ### Ollama installed natively on the host
 

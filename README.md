@@ -142,6 +142,23 @@ docker compose logs ollama | grep -E "CONTEXT_LENGTH|cloud disabled"   # 4096 an
 
 Docker Model Runner, or an Ollama installed on the host, can be used instead by changing `.env` only: [docs/setup.md](docs/setup.md#other-platforms).
 
+### Apple Silicon with Docker Model Runner (not tested)
+
+No code change, only Docker Desktop settings and `.env` (full steps: [docs/setup.md](docs/setup.md#docker-model-runner-not-tested)):
+
+```bash
+# 1. Docker Desktop → Settings → AI → Enable Docker Model Runner
+docker model pull ai/gemma3:1b-q4_K_M                            # 2. same 1B model, Q4_K_M
+docker model configure --context-size 4096 ai/gemma3:1b-q4_K_M   # 3. context the app assumes (or set LLM_CONTEXT_TOKENS)
+# 4. In .env: delete COMPOSE_PROFILES, then set
+#    LLM_URL=http://model-runner.docker.internal/engines/v1
+#    LLM_MODEL=ai/gemma3:1b-q4_K_M     (exactly as `docker model ls` shows it)
+docker compose up -d --build                                     # 5. start
+curl -i http://127.0.0.1:8000/readyz                             #    expect "ready"
+```
+
+Untested: the development machine is an Intel Mac, where Docker Model Runner is unavailable (TS-001).
+
 ## Running with Docker Compose
 
 ```bash

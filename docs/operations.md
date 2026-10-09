@@ -1,6 +1,6 @@
 # Operations
 
-Running the service day to day: logs and traces, how corpus changes are picked up, restart and recovery, supported formats and limits, and platform notes (REQ-106). Startup is in [Setup](setup.md); settings in [Configuration](configuration.md); behaviour on each failure in Failure handling (to be written, REQ-108).
+Running the service day to day: logs and traces, how corpus changes are picked up, restart and recovery, supported formats and limits, and platform notes (REQ-106). Startup is in [Setup](setup.md); settings in [Configuration](configuration.md); behaviour on each failure in [Failure handling](failure-handling.md).
 
 ## Everyday commands
 

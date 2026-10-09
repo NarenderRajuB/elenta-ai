@@ -199,6 +199,17 @@ class TestSpanContent:
             len(attrs["selection.dropped_chunk_ids"]) == len(attrs["selection.dropped_scores"]) == DROPPED_DETAIL_LIMIT
         )
 
+    def test_positive_competing_files_on_selection_span(self, tmp_path):
+        files = {
+            "remote-2023.md": "Staff may work remotely for up to 2 days per week.",
+            "remote-2024.md": "Staff may work remotely for up to 4 days per week.",
+        }
+        spans, _, _ = run_chat(
+            tmp_path, "days per week remotely", lambda r: httpx.Response(200, content=sse("ok")), files=files
+        )
+        attrs = spans["evidence.selection"].attributes
+        assert list(attrs["selection.competing_files"]) == ["remote-2023.md", "remote-2024.md"]
+
     def test_edge_corrupt_file_recorded_on_refresh_span(self, tmp_path):
         (tmp_path / "bad.txt").write_bytes(b"\xff\xfe")
         spans, _, _ = run_chat(tmp_path, "annual leave", lambda r: httpx.Response(200, content=sse("ok")))

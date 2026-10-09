@@ -11,7 +11,7 @@ from app.chunking import chunk_document, chunk_text
 from app.corpus import Corpus
 from app.index import STOP_WORDS, Bm25Index, IndexCache, query_terms
 from app.ingestion import Document, Fingerprint
-from app.selection import DROPPED_DETAIL_LIMIT, select
+from app.selection import COMPETING_SCORE_RATIO, DROPPED_DETAIL_LIMIT, SelectedChunk, competing_files, select
 from app.tokens import METHOD, estimate_tokens
 
 FP = Fingerprint(1, 1, 1, 1)
@@ -297,3 +297,57 @@ class TestTokenEstimate:
 
     def test_edge_stop_words_are_lowercase_single_words(self):
         assert all(w == w.lower() and " " not in w for w in STOP_WORDS)
+
+
+# ---------------------------------------------------------------------------
+# REQ-054 / ADR-019: documents that match the question about equally well
+# ---------------------------------------------------------------------------
+
+REMOTE_2023 = "# Remote working (2023)\n\nStaff may work remotely for up to 2 days per week.\n"
+REMOTE_2024 = "# Remote working (2024)\n\nStaff may work remotely for up to 4 days per week.\n"
+
+
+def chunk(path: str, score: float) -> SelectedChunk:
+    return SelectedChunk(f"{path}#0:00000000", path, "text", score, 1, False)
+
+
+class TestReq054CompetingSources:
+    def test_positive_two_conflicting_documents_both_named(self, tmp_path):
+        index = index_for(tmp_path, {"remote-2023.md": REMOTE_2023, "remote-2024.md": REMOTE_2024})
+        sel = select(index, "How many days per week may staff work remotely?", 1500, 0.0)
+        assert sel.competing_files == ("remote-2023.md", "remote-2024.md")
+
+    def test_positive_three_competing_files_in_rank_order(self):
+        chunks = [chunk("a.md", 5.0), chunk("b.md", 4.5), chunk("c.md", 4.0)]
+        assert competing_files(chunks) == ("a.md", "b.md", "c.md")
+
+    def test_negative_single_file_never_competes(self, tmp_path):
+        text = "\n\n".join(f"Remote working rule {i}: staff may work remotely." for i in range(5))
+        sel = select(index_for(tmp_path, {"remote.md": text}, chunk_chars=60), "work remotely", 1500, 0.0)
+        assert len(sel.chunks) > 1 and sel.competing_files == ()
+
+    def test_negative_weakly_related_second_file_ignored(self, tmp_path):
+        files = {
+            "leave.md": "Employees receive 25 days of annual leave per calendar year.",
+            "remote-2024.md": REMOTE_2024,
+        }
+        sel = select(index_for(tmp_path, files), "How many days of annual leave do employees get?", 1500, 0.0)
+        assert set(sel.source_files) == {"leave.md", "remote-2024.md"}  # both used ...
+        assert sel.competing_files == ()  # ... but only one really matches
+
+    def test_negative_no_evidence_no_competing_files(self, tmp_path):
+        sel = select(index_for(tmp_path, {"remote-2023.md": REMOTE_2023}), "capital of France", 1500, 0.0)
+        assert not sel.sufficient and sel.competing_files == ()
+
+    def test_edge_score_exactly_at_ratio_competes_just_below_does_not(self):
+        top = 10.0
+        assert competing_files([chunk("a.md", top), chunk("b.md", top * COMPETING_SCORE_RATIO)]) == ("a.md", "b.md")
+        assert competing_files([chunk("a.md", top), chunk("b.md", top * COMPETING_SCORE_RATIO - 0.001)]) == ()
+
+    def test_edge_file_judged_by_its_best_chunk(self):
+        # Each file is judged by its best chunk; its weaker chunks don't pull it below the ratio.
+        chunks = [chunk("a.md", 5.0), chunk("b.md", 4.9), chunk("a.md", 1.0), chunk("b.md", 0.5)]
+        assert competing_files(chunks) == ("a.md", "b.md")
+
+    def test_edge_empty_input(self):
+        assert competing_files([]) == ()

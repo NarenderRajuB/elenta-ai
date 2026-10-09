@@ -40,7 +40,7 @@ These are deliberate trade-offs or measured weaknesses, each recorded where it w
 **Answers and evidence**
 - **Exact-word matching only.** No synonyms ("holiday" does not find "leave"), no stemming ("policy" does not find "policies"), English stop words only (ADR-007).
 - **Small model.** A model of at most 1B parameters sometimes answers from the first matching evidence block and misses the rest (TS-008).
-- **Conflicting documents are not reliably surfaced in the answer text.** Both sources are always listed, but no model tried surfaced the conflict in its answer in any evaluation run (TS-008, ADR-009). How to address this is an open decision.
+- **Conflicts are flagged, not detected.** When two or more documents match a question about equally well, a notice names them above the answer (ADR-019). Code can't tell whether they actually disagree, and the model's answer may still give only one of their values (TS-008).
 - **Token counts for the prompt are estimates** (characters ÷ 4) unless the model server reports real counts; estimates undercount for scripts like Chinese or Japanese (ADR-007).
 - **Questions are limited to 8,000 characters**, and must also fit the model's context window with the evidence; a question that doesn't fit is rejected, never truncated (REQ-055).
 

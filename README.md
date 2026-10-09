@@ -43,6 +43,7 @@ Start with [docs/README.md](docs/README.md), the index of the guide.
 | Browser UI | Static HTML/JS/CSS, text-only rendering, strict CSP; no Streamlit (ADR-017) | ADR-010 |
 | Observability | OpenTelemetry trace per request (trace id = request id) → local Jaeger; JSON logs with the request id | ADR-008 |
 | Prompt and output safety | Fixed system instructions; evidence in delimited, neutralised blocks; leak and reasoning filter on output; no execution of document text | ADR-006 |
+| Conflicting documents | No automatic precedence; a notice names documents scoring at least 80% of the top score | ADR-009, ADR-019 |
 
 ## Prerequisites
 
@@ -76,6 +77,7 @@ Each event is one frame: `event: <name>`, one `data:` line of JSON, a blank line
 |---|---|---|
 | `meta` | first | `request_id` |
 | `sources` | after evidence selection | `chunks` (id, source, score, estimated_tokens, truncated), `files`, `budget_tokens`, `used_tokens`, `dropped_chunks`, `truncated`, `insufficient_reason`, `skipped_files` (unusable files with reason), `corpus_version`, `documents`, `token_count_method` |
+| `notice` | after `sources`, when two or more documents match the question about equally well (ADR-019) | `code` (`competing_sources`), `files`, `message` |
 | `token` | repeatedly | `text`: the next piece of the answer |
 | `refusal` | output guard stopped an instruction leak | `text`: replaces everything shown so far |
 | `done` | success (terminal) | `request_id`, `finish_reason`, `model_called`, `tokens` {prompt, completion, source: `reported` or `estimated (chars/4)`}, `timings_ms` per stage |
@@ -226,7 +228,7 @@ Run a single requirement's tests, for example:
 uv run pytest -v tests/test_config.py::TestReq016FailFast
 ```
 
-Current result: **547 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Test-only dev dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The other dev tools are listed below. The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
+Current result: **561 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Test-only dev dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The other dev tools are listed below. The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
 
 ## Code quality and security checks (REQ-120..123)
 
@@ -601,6 +603,21 @@ Tests: `tests/test_selection.py::TestReq053Insufficient`
 | ❌ | Unrelated question ("Who won the 1966 World Cup?") | `no_relevant_evidence` |
 | ⚠️ | Empty, whitespace, punctuation-only or emoji-only question | `no_meaningful_terms` |
 | ⚠️ | Corpus with only unsupported files | `empty_corpus` |
+
+### REQ-054 / REQ-074: Competing sources surfaced (ADR-019)
+Code: `app/selection.py` (`competing_files`), `app/chat.py` (`notice` event), `app/static/app.js` · Tests: `tests/test_selection.py::TestReq054CompetingSources`, `tests/test_chat.py::TestCompetingSources`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | Two documents with conflicting values, equal scores | `notice` before the answer naming both, in rank order; model still asked |
+| ✅ | Three files within 80% of the top score | All three named |
+| ✅ | Notice in the browser | Shown above the answer with `textContent` |
+| ❌ | Only one document really matches (other far below 80%) | No notice |
+| ❌ | Several chunks from one file | No notice |
+| ❌ | No evidence | No notice, model not called |
+| ⚠️ | Second file at exactly 80% / just below | Named / not named |
+| ⚠️ | A file's weaker chunks | Judged by its best chunk |
+| ⚠️ | Model fails after the notice | `meta → sources → notice → error` |
 
 ### REQ-055 / REQ-071: Explicit token budget, no silent overflow
 Tests: `tests/test_selection.py::TestReq055Budget`

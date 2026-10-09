@@ -57,7 +57,7 @@ Eight controls (ADR-006). Seven are enforced in code and testable without a mode
 | Make the assistant adopt another role | 3/3 safe |
 | Get the system instructions printed | 3/3 safe: C4 blocked the leak attempt in all 3 runs |
 | Plain grounded questions (two cases) | 6/6 correct |
-| Two documents conflict | 0/3: answered with one value only (see remaining risks) |
+| Two documents conflict | 3/3 surfaced by the code-level notice naming both files; the model's own text gave one value (ADR-019) |
 
 These are small, fixed tests that show the controls working; they are not a guarantee. Another candidate model (`qwen3:0.6b`) affirmed the injected approval in all 3 runs, which is why model choice was part of the decision (ADR-016).
 
@@ -104,12 +104,12 @@ The app reads only under `/data` (REQ-064) and writes nowhere.
 
 ## Remaining risks
 
-Stated plainly, as the brief asks. Each is either accepted for this scope or has a recorded open decision.
+Stated plainly, as the brief asks. Each is accepted for this scope, with the reason recorded in the ADR or TS entry cited.
 
 1. **The model can still repeat an injected claim in its own words.** When evidence is found, C7 (prompt wording) is the only control on what the model concludes from it. `gemma3:1b` resisted the tested injections, but a different wording or document could succeed. No keyword filter for "unsupported decisions" was added, because any such rule would be invented beyond the brief and easy to get around (ADR-006).
 2. **The leak guard (C4) catches copying, not paraphrase.** A model that summarises its instructions in other words isn't stopped.
 3. **The reasoning filter (C5) knows two markers.** Reasoning in another format would be shown.
-4. **Conflicting documents aren't surfaced in the answer text.** Both sources are always listed, but the model answers with one value (TS-008); how to handle this is an open decision.
+4. **Conflicts are flagged by score, not detected.** The notice names documents that match equally well (ADR-019); a conflicting document that scores lower isn't named, and the answer text may still give one value.
 5. **No authentication**, by design for one local user (see Network assumptions).
 6. **Unexpected errors are logged with their stack trace and message**, which could include data from the failing operation. Traces record only the exception class.
 7. **Known vulnerabilities without a fix** remain in the Debian base image (164 findings, 0 critical; TS-009). Scan results are a snapshot: re-run `scripts/verify.sh` to pick up new findings.

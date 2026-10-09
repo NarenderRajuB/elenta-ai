@@ -74,6 +74,9 @@ sequenceDiagram
     C->>K: Refresh corpus, get index (section 1)
     C->>S: Select evidence (BM25, token budget)
     C-->>U: event: sources {files, chunk ids, scores, budget, skipped files}
+    opt Two or more documents match about equally well
+        C-->>U: event: notice {competing_sources, files}
+    end
     alt No qualifying evidence
         C-->>U: event: token {fixed "not enough information" reply}
         C-->>U: event: done {model_called: false}
@@ -107,6 +110,7 @@ sequenceDiagram
 | 3 | Refresh | Section 1. Span `corpus.refresh` | ADR-005 |
 | 4 | Select | Question reduced to meaningful words; chunks scored with BM25; filled into `CONTEXT_TOKEN_BUDGET` (1,500 estimated tokens) in rank order. Span `evidence.selection` | ADR-007 |
 | 5 | Sources | The `sources` event lists what was selected, **from selection, not from the model's text**, so attribution can't be removed by a document | ADR-006 C3 |
+| 5a | Competing sources | If two or more files each score at least 80% of the top score, a `notice` event names them before the answer, so a possible conflict is surfaced whatever the model writes | ADR-019 |
 | 6 | Insufficient evidence | Empty corpus, no searchable words or no relevant chunk: a fixed reply, and **the model is not called** | ADR-006 C6 |
 | 7 | Assemble | System message (fixed instructions) → evidence blocks labelled with chunk ids, delimiters in document text neutralised → question. Rejected if it would exceed the context window minus the answer allowance. Span `prompt.assembly` | ADR-006 C1, C2 |
 | 8 | Infer | Streamed request to `LLM_URL` with temperature 0; three timeouts. Span `inference.stream` records model, backend, first-token time and token counts | ADR-002, ADR-013 |
@@ -116,8 +120,8 @@ sequenceDiagram
 **Event stream:** always exactly one terminal event, `done` or `error`.
 
 ```text
-meta → sources → token* → [refusal] → done
-meta → [sources] → token* → error
+meta → sources → [notice] → token* → [refusal] → done
+meta → [sources] → [notice] → token* → error
 ```
 
 Framing and fields are described in the [README](../README.md#streaming-protocol-post-chat-server-sent-events).

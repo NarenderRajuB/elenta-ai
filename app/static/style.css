@@ -22,6 +22,7 @@ button:disabled { opacity: .45; cursor: default; }
 .answer { white-space: pre-wrap; overflow-wrap: anywhere; min-height: 3em; padding: 14px 16px; background: #fff; border: 1px solid var(--line); border-radius: 8px; }
 .answer.refused { border-color: var(--err); }
 .error { color: var(--err); font-weight: 600; }
+.notice { border-left: 4px solid #b54708; background: #fffaeb; padding: 8px 12px; margin: 0 0 8px; }
 .sources, .skipped { list-style: none; padding: 0; margin: 0; }
 .sources li { padding: 8px 12px; background: #fff; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 6px; }
 .sources .file { font-weight: 600; }

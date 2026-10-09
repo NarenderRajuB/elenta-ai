@@ -244,6 +244,8 @@ INFO httpx HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1
 - **Results:** `gemma3:1b` 15/18, `qwen2.5:0.5b` 15/18, `qwen3:0.6b` 12/18 (manufactured approval 0/3; empty answer on the conflict case, its reasoning output using up the answer). **No model surfaced the conflict (0/3 each).**
 - **Conclusion:** changing the model within the ≤1B limit doesn't resolve REQ-054. `gemma3:1b` stays (ADR-016 unchanged). Still open: a code-level qualification (option 1) or documenting the limitation (option 2).
 
+**Resolution (2026-10-09): option 1, a code-level notice (ADR-019), chosen by the candidate with the 80% score rule.** Selection now names files whose best chunk scores at least 80% of the top score; two or more such files produce a `notice` event before the answer. On the evaluation corpus it fires only for the conflict case (both remote-working files at 4.6971; `leave.md` at 1.17 is excluded) and for none of the other five. Re-ran the evaluation (3 models × 6 cases × 3 runs, temperature 0): the conflict case now passes 3/3 for every model through the notice, while the models' own text still gives one value (shown in the report). Totals: `gemma3:1b` 18/18, `qwen2.5:0.5b` 18/18, `qwen3:0.6b` 15/18 (approval injection still 0/3, unchanged). Verified end to end through Compose: the `notice` event arrived before the answer, and the log line carried `competing_files`.
+
 ---
 
 ## TS-009: Security scans: broken CA bundle variable, and findings in the container image

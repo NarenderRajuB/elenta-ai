@@ -12,7 +12,7 @@ Every diagnostic below can be found from the **request id** shown under the answ
 | [Question too long to fit](#1-corpus-larger-than-the-context-window-req-071) | Error: "The question is too long…" | No | `error` event `question_too_long`; trace `prompt.estimated_tokens` vs `prompt.limit_tokens` | Handled |
 | [Reasoning or hidden instructions in the output](#2-reasoning-or-hidden-instructions-in-the-output-req-072) | Reasoning removed silently from the answer; a leak replaced by a refusal | Yes | `refusal` event; `reasoning_blocks_removed`; log warning; trace `guard.*` | Handled; limits stated |
 | [Corrupt, incomplete, changing or unsupported document](#3-corrupt-incomplete-changing-or-unsupported-documents-req-073) | Answer from the other files; "Not used: file (reason)" under the sources | Yes | `skipped_files`; `corpus file skipped` log; trace `corpus.skipped_errors` | Handled |
-| [Conflicting or outdated documents](#4-conflicting-or-outdated-documents-req-074) | Both sources listed; the answer text usually gives one value | Yes | Both files in `sources` and the trace | **Limitation** (TS-008) |
+| [Conflicting or outdated documents](#4-conflicting-or-outdated-documents-req-074) | A notice above the answer naming the competing documents; both listed as sources | Yes | `notice` event; `selection.competing_files` on the trace; log field | Handled; limits stated (ADR-019) |
 | [Empty corpus or unsupported question](#5-empty-corpus-or-question-not-covered-req-075) | A fixed "not enough information" reply | **No** | `insufficient_reason`; `model_called: false` | Handled |
 | [Model unavailable, slow or failing mid-stream](#6-model-unavailable-slow-or-failing-mid-stream-req-076) | Error with the request id; any partial answer marked incomplete | Tried | `error` event code and `partial`; `model call failed` log; trace `error.code` | Handled |
 
@@ -92,17 +92,24 @@ A file that is changing is **not served at all**, not even its previous version,
 
 ## 4. Conflicting or outdated documents (REQ-074)
 
-**Decision (ADR-009):** no automatic precedence. File dates reflect when a file was copied, not which document is authoritative, so the service doesn't pick a winner. The system instructions tell the model to say when evidence blocks disagree and to cite each one.
+**Decisions:** no automatic precedence (ADR-009): file dates reflect when a file was copied, not which document is authoritative, so the service never picks a winner. Competing documents are surfaced by code (ADR-019), because the model can't be relied on to do it: in evaluation, no model of at most 1B parameters mentioned a conflict in its answer (TS-008).
 
-**What happens today:** both conflicting chunks are selected and sent to the model, and **both files are always listed as sources**. But in the evaluation, the model answered with only one of the values in every run, and changing the instruction wording or the model (three models of at most 1B parameters) did not fix it (TS-008).
+**What happens:** after selection, each file is scored by its best chunk. If two or more files score at least 80% of the top score, they **compete**: the service sends a `notice` event naming them, before the answer. The model is still asked, and both files are listed as sources. The system instructions also tell the model to say when evidence disagrees, as an extra layer.
 
-**User sees:** an answer giving one value, with both documents under the sources. For example, with `remote-2023.md` (2 days) and `remote-2024.md` (4 days): *"Up to 2 days per week."* with both files listed.
+**User sees:** above the answer, for example with `remote-2023.md` (2 days) and `remote-2024.md` (4 days):
 
-**Diagnostics:** both chunk ids and files in the `sources` event and the `evidence.selection` span; the evaluation's conflict case in [evidence/injection-eval.md](evidence/injection-eval.md).
+> *This answer draws on 2 documents that match your question about equally well: remote-2023.md, remote-2024.md. They may disagree, and the answer may reflect only one of them. Check each one.*
 
-**Limitation and workaround:** the answer text can't be relied on to flag a conflict; **check the listed sources** when more than one document is cited. Removing or renaming the outdated document resolves it, since the next question uses the current corpus. Whether to add a code-level notice when several documents are cited is an open decision (TS-008).
+followed by the model's answer (in evaluation, *"Up to 2 days per week."*) and both files under the sources.
 
-**Tests:** manual (`scripts/eval_injection.py`, conflict case); the instruction wording is checked in `tests/test_prompt.py::TestC7SystemPromptContent`.
+**Diagnostics:** `notice` event (`code: competing_sources`, `files`, `message`); trace `evidence.selection` attribute `selection.competing_files`; log `evidence selected` field `competing_files`; the conflict case in [evidence/injection-eval.md](evidence/injection-eval.md), now 3/3 for all three models.
+
+**Limitations:**
+- Code can't tell whether documents actually disagree, so equally relevant documents that agree also get the notice (hence "may disagree").
+- A conflicting document scoring below 80% of the top, or not fitting the evidence budget, isn't named.
+- The answer text itself may still give one value; the notice says so. Removing or renaming the outdated document resolves it on the next question.
+
+**Tests:** `tests/test_selection.py::TestReq054CompetingSources` (rule, boundary, best chunk per file), `tests/test_chat.py::TestCompetingSources` (event order, no notice for one document or no evidence, notice kept when the model fails), `tests/test_observability.py::TestSpanContent`, `tests/test_ui.py`; live: `scripts/eval_injection.py`, conflict case.
 
 ## 5. Empty corpus or question not covered (REQ-075)
 

@@ -56,6 +56,12 @@ def test_positive_untrusted_text_written_with_text_apis():
     assert "textContent" in APP_JS and "createTextNode" in APP_JS
 
 
+def test_positive_competing_sources_notice_shown_as_text():
+    # REQ-054 / ADR-019: the notice names file names, which are untrusted.
+    assert 'id="notice"' in INDEX
+    assert '$("notice").textContent = data.message' in APP_JS_CODE
+
+
 # --- Negative ----------------------------------------------------------------------
 
 

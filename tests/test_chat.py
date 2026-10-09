@@ -4,7 +4,8 @@
 # Covers REQ-030/032 (endpoint and framing), REQ-051 (sources), REQ-053/075 (no
 # evidence), REQ-055 (budget visible), REQ-056 (skipped files visible), REQ-062/072
 # (guard on the live path), REQ-076 (model failures as error events), REQ-082/083
-# (request id, labelled token counts) and REQ-033 (disconnect closes the model call).
+# (request id, labelled token counts), REQ-033 (disconnect closes the model call) and
+# REQ-054 (competing sources notice).
 
 import json
 from pathlib import Path
@@ -14,7 +15,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app.chat import ERROR_MESSAGES, INSUFFICIENT_REPLIES, ChatDeps, answer
+from app.chat import ERROR_MESSAGES, INSUFFICIENT_REPLIES, ChatDeps, answer, competing_sources_message
 from app.config import load_settings
 from app.corpus import Corpus
 from app.index import IndexCache
@@ -176,6 +177,47 @@ class TestNoEvidence:
         done = dict(events)["done"]
         assert done["model_called"] is False and done["finish_reason"] == "insufficient_evidence"
         assert dict(events)["sources"]["insufficient_reason"] == reason
+
+
+# ---------------------------------------------------------------------------
+# REQ-054 / ADR-019: competing sources surfaced by code, whatever the model says
+# ---------------------------------------------------------------------------
+
+REMOTE = {
+    "remote-2023.md": "# Remote working (2023)\n\nStaff may work remotely for up to 2 days per week.\n",
+    "remote-2024.md": "# Remote working (2024)\n\nStaff may work remotely for up to 4 days per week.\n",
+}
+
+
+class TestCompetingSources:
+    def test_positive_notice_names_both_files_before_the_answer(self, tmp_path):
+        # The model picks one value, as gemma3:1b did in TS-008; the notice is still sent.
+        up = Upstream(lambda r: httpx.Response(200, content=sse_body("Up to 2 days per week.")))
+        _, events = ask(tmp_path, REMOTE, "How many days per week may staff work remotely?", up)
+        assert names(events)[:4] == ["meta", "sources", "notice", "token"]
+        notice = dict(events)["notice"]
+        assert notice["code"] == "competing_sources"
+        assert notice["files"] == ["remote-2023.md", "remote-2024.md"]
+        assert notice["message"] == competing_sources_message(("remote-2023.md", "remote-2024.md"))
+        assert "remote-2023.md" in notice["message"] and "remote-2024.md" in notice["message"]
+        assert len(up.requests) == 1  # the model is still asked; nothing is withheld
+
+    def test_negative_single_matching_document_no_notice(self, tmp_path):
+        up = Upstream(lambda r: httpx.Response(200, content=sse_body("25 days.")))
+        _, events = ask(tmp_path, {"leave.md": LEAVE, **REMOTE}, "How many days of annual leave?", up)
+        assert "notice" not in names(events)
+
+    def test_negative_no_evidence_no_notice(self, tmp_path):
+        up = Upstream(lambda r: httpx.Response(200, content=sse_body("x")))
+        _, events = ask(tmp_path, REMOTE, "capital of France", up)
+        assert "notice" not in names(events) and up.requests == []
+
+    def test_edge_notice_survives_model_failure(self, tmp_path):
+        def refuse(request):
+            raise httpx.ConnectError("refused")
+
+        _, events = ask(tmp_path, REMOTE, "How many days per week may staff work remotely?", Upstream(refuse))
+        assert names(events) == ["meta", "sources", "notice", "error"]
 
 
 # ---------------------------------------------------------------------------

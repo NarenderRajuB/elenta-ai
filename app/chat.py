@@ -7,12 +7,14 @@
 # framing; app/sse.py and app/main.py turn the events into a response (ADR-004).
 #
 # Event sequence (always exactly one terminal event, `done` or `error`):
-#   meta -> sources -> token* -> [refusal] -> done
-#   meta -> [sources] -> token* -> error
+#   meta -> sources -> [notice] -> token* -> [refusal] -> done
+#   meta -> [sources] -> [notice] -> token* -> error
 #
 # Deterministic guards that do not depend on the model:
 #   - no qualifying evidence: fixed reply, the model is not called (ADR-006 C6)
 #   - sources come from selection, not from model text (ADR-006 C3)
+#   - documents that match the question about equally well are named in a `notice`
+#     event, so a possible conflict is surfaced even if the model picks one (ADR-019)
 #   - prompt too large: rejected, never silently truncated (REQ-055)
 #
 # Observability (ADR-008, REQ-080..084): one trace per request. The root span
@@ -83,6 +85,13 @@ def _error(request_id: str, code: str, partial: bool) -> dict:
         "event": "error",
         "data": {"request_id": request_id, "code": code, "message": ERROR_MESSAGES[code], "partial": partial},
     }
+
+
+def competing_sources_message(files: tuple[str, ...]) -> str:
+    return (
+        f"This answer draws on {len(files)} documents that match your question about equally well: "
+        f"{', '.join(files)}. They may disagree, and the answer may reflect only one of them. Check each one."
+    )
 
 
 def _request_id(span: trace.Span) -> str:
@@ -163,6 +172,7 @@ async def answer(question: str, deps: ChatDeps) -> AsyncIterator[dict]:
                 # only, never chunk text (REQ-084).
                 "selection.dropped_chunk_ids": [d.chunk_id for d in selection.dropped_top],
                 "selection.dropped_scores": [d.score for d in selection.dropped_top],
+                "selection.competing_files": list(selection.competing_files),
                 "selection.truncated": selection.truncated,
                 "selection.token_count_method": TOKEN_METHOD,
                 "selection.insufficient_reason": selection.insufficient_reason or "",
@@ -176,6 +186,7 @@ async def answer(question: str, deps: ChatDeps) -> AsyncIterator[dict]:
                 "used_tokens": selection.used_tokens,
                 "dropped_chunks": selection.dropped_count,
                 "insufficient_reason": selection.insufficient_reason,
+                "competing_files": list(selection.competing_files),
             },
         )
 
@@ -208,6 +219,17 @@ async def answer(question: str, deps: ChatDeps) -> AsyncIterator[dict]:
                 "token_count_method": TOKEN_METHOD,
             },
         }
+
+        if selection.competing_files:
+            # From selection code, not the model: shown whatever the model answers (REQ-054).
+            yield {
+                "event": "notice",
+                "data": {
+                    "code": "competing_sources",
+                    "files": list(selection.competing_files),
+                    "message": competing_sources_message(selection.competing_files),
+                },
+            }
 
         # Testing the reason itself (not `selection.sufficient`) lets the type checker
         # see it is a str here.

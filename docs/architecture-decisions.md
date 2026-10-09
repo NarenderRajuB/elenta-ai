@@ -4,7 +4,7 @@ Decision log required by brief §5.11 (REQ-110, REQ-112). Entries are appended *
 
 **Statuses**: `Proposed` (drafted, awaiting candidate acceptance) · `Accepted` · `Superseded` · `Rejected`.
 
-> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-002, ADR-004, ADR-005, ADR-006, ADR-007, ADR-008, ADR-009, ADR-010, ADR-011, ADR-012, ADR-013 (model superseded), ADR-014, ADR-015, ADR-016, ADR-018. Rejected: ADR-003, ADR-017.
+> **Current state (2026-10-08):** ADRs were drafted from the brief before any code was written and start as `Proposed`. Each must be explicitly accepted (or changed) by the candidate before the related feature is implemented. Accepted so far: ADR-001, ADR-002, ADR-004, ADR-005, ADR-006, ADR-007, ADR-008, ADR-009, ADR-010, ADR-011, ADR-012, ADR-013 (model superseded), ADR-014, ADR-015, ADR-016, ADR-018, ADR-019. Rejected: ADR-003, ADR-017.
 
 Template:
 
@@ -284,6 +284,8 @@ Template:
 
 **Consequences.** − Conflict *detection* relies on the model's reading; a weak model may miss it. This is a stated limitation. Follow-up: consider an opt-in documented convention (e.g. a front-matter `effective_date`) only if the candidate decides it is defensible.
 
+- **Revised 2026-10-09 (ADR-019):** the model did not surface conflicts in evaluation (TS-008), so a code-level notice now names documents that match the question about equally well. "No automatic precedence" still stands.
+
 ---
 
 ## ADR-010: Minimal static browser UI with plain-text rendering only
@@ -509,6 +511,36 @@ Template:
 - Applying ruff format and mypy reformatted existing code and needed small type-driven code changes (e.g. `app/chat.py` tests `insufficient_reason` directly). All tests pass after the changes.
 - Follow-up: `uv run pre-commit install` is needed once per clone (documented in the README).
 - **Revised 2026-10-08 (TS-010):** Trivy now scans every image Compose runs, the app and the Jaeger viewer, with the same report and gate for each (`trivy-app-*`, `trivy-jaeger-*`). The Jaeger reference is read from `compose.yaml`, so it is pinned in one place.
+
+---
+
+## ADR-019: Competing sources surfaced by code: a notice when documents match the question about equally well
+
+- **Status:** Accepted by the candidate on 2026-10-09, with the 80% score rule · **Date:** 2026-10-09
+- **Requirements:** REQ-054, REQ-074
+- **Revises:** ADR-009 (adds a code-level control; "no automatic precedence" is unchanged)
+
+**Context.** Brief §5.5: "When current documents conflict and no defensible precedence rule resolves the conflict, surface the conflict and identify the competing sources." ADR-009 relied on the system instructions (C7) to make the model say so. In evaluation no model of at most 1B parameters did, in any run, whatever the wording (TS-008). ADR-009 also rejected detecting contradictions in code, as not feasible reliably and simply.
+
+**Decision.** Code doesn't decide *whether* documents disagree; it identifies documents that **compete**: those that match the question about equally well.
+- After selection, each file is scored by its best selected chunk. A file competes if that score is at least `COMPETING_SCORE_RATIO` (0.8) of the top score. If two or more files compete, `Selection.competing_files` lists them in rank order (`app/selection.py`).
+- The pipeline sends a `notice` event after `sources` and before the answer: `{"code": "competing_sources", "files": [...], "message": "..."}`. The browser shows the message above the answer, as text. The model is still asked, and its answer is not changed.
+- Recorded on the `evidence.selection` span (`selection.competing_files`) and the `evidence selected` log line.
+- No precedence: the notice never picks a document. The C7 instruction stays as an extra layer.
+
+**Rationale.** Like C3 (sources from code), this makes the brief's requirement hold whatever the model writes. Score near-ties are exactly the TS-008 situation (both documents scored 2.7842). The ratio is a single documented constant, tested at its boundary.
+
+**Alternatives rejected.**
+- *Notice whenever two or more files are used:* fires on most answers (in the evaluation corpus, the leave question also used both remote-working files, at under 10% of the top score) and stops meaning anything.
+- *Ask the model once per document and compare answers:* multiplies model calls (about 4 s each on the development machine), breaks progressive streaming, and comparing free text needs its own invented rule.
+- *Detect contradictions in code (numbers, negations):* fragile and beyond the brief (ADR-009).
+- *Front-matter `effective_date` as a precedence rule:* only works if authors add it; could be added later as an opt-in.
+
+**Consequences.**
+- + The user is told about competing documents in every case the selection can see; measured 3/3 for all three evaluated models on the conflict case (`docs/evidence/injection-eval.md`).
+- − False positives: equally relevant documents that agree also get the notice, hence the wording "may disagree".
+- − False negatives: a conflicting document scoring under 80% of the top, or not fitting the evidence budget, isn't named.
+- − The answer text itself may still give one value; the notice says so ("the answer may reflect only one of them").
 
 ---
 

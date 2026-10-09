@@ -12,6 +12,12 @@
 # If nothing qualifies, the Selection says why (empty corpus, no meaningful words,
 # no relevant chunk) so the caller can answer "not enough evidence" without asking
 # the model at all, which is a deterministic guard rather than trusting the model to admit it.
+#
+# Competing sources (ADR-019, REQ-054): code can't tell whether two documents disagree,
+# but it can tell when two or more documents match the question about equally well.
+# A file competes when its best selected chunk scores at least COMPETING_SCORE_RATIO of
+# the top score. If two or more files compete, they are reported so the caller can tell
+# the user to check them, without choosing between them (no precedence, ADR-009).
 
 from dataclasses import dataclass
 
@@ -20,6 +26,11 @@ from app.tokens import estimate_tokens, max_chars_for_tokens
 
 # How many dropped chunks to list individually; the full count is always recorded.
 DROPPED_DETAIL_LIMIT = 10
+
+# A file's best chunk must score at least this fraction of the top chunk's score for the
+# file to count as competing. 0.8 flags near-ties (the TS-008 case scored identically)
+# while ignoring files that only share a word or two with the question.
+COMPETING_SCORE_RATIO = 0.8
 
 
 @dataclass(frozen=True)
@@ -51,6 +62,8 @@ class Selection:
     candidates_considered: int
     dropped_count: int
     dropped_top: tuple[DroppedChunk, ...]
+    # Files that match the question about equally well, in rank order; empty unless 2+.
+    competing_files: tuple[str, ...] = ()
 
     @property
     def sufficient(self) -> bool:
@@ -112,4 +125,20 @@ def select(index: Bm25Index, question: str, budget_tokens: int, min_score: float
         candidates_considered=len(ranked),
         dropped_count=len(dropped),
         dropped_top=tuple(dropped[:DROPPED_DETAIL_LIMIT]),
+        competing_files=competing_files(chosen),
     )
+
+
+def competing_files(chunks: list[SelectedChunk]) -> tuple[str, ...]:
+    """Files whose best chunk scores at least COMPETING_SCORE_RATIO of the top score.
+
+    Returns them in rank order when there are two or more, otherwise an empty tuple.
+    """
+    best: dict[str, float] = {}
+    for chunk in chunks:  # already in rank order, so the first chunk per file is its best
+        best.setdefault(chunk.rel_path, chunk.score)
+    if not best:
+        return ()
+    top = max(best.values())
+    files = tuple(path for path, score in best.items() if score >= COMPETING_SCORE_RATIO * top)
+    return files if len(files) >= 2 else ()

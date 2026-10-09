@@ -25,6 +25,8 @@ function resetView() {
   $("answer").classList.remove("refused");
   $("error").hidden = true;
   $("error").textContent = "";
+  $("notice").hidden = true;
+  $("notice").textContent = "";
   $("sources").replaceChildren();
   $("skipped").replaceChildren();
   $("budget").textContent = "";
@@ -64,6 +66,11 @@ function handle(name, data) {
       break;
     case "sources":
       renderSources(data);
+      break;
+    case "notice":
+      // Documents that match equally well and may disagree (ADR-019); text only.
+      $("notice").textContent = data.message;
+      $("notice").hidden = false;
       break;
     case "token":
       $("answer").append(document.createTextNode(data.text));

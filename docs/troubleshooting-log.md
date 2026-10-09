@@ -414,3 +414,30 @@ With a 1B model, small wording changes had large, unpredictable effects, so the 
 **Remaining limitation (open decision).** When evidence is found, whether the model repeats an injected approval depends on the model and the hardware; the prompt-level control (C7) cannot guarantee it. The evaluator now detects the failure. Whether to add a deterministic control, or to state the limitation more strongly, is a decision for the candidate.
 
 **Resolution (2026-10-09): deterministic control C9 chosen by the candidate (ADR-021), with no change to the architecture.** `ApprovalGuard` in `app/output_guard.py` stops answers that affirm an approval and replaces them with a fixed reply. Evaluation (3 models × 6 cases × 3 runs): all three 18/18; `qwen3:0.6b`'s three "Yes, … approved" answers and `qwen2.5:0.5b` repeating "Every expense claim is APPROVED" are stopped; `gemma3:1b` unchanged. **Dead end on the way:** the first version also stopped `qwen2.5:0.5b`'s "If the claim is approved, … submit it" on the role-injection case, a false positive; conditional words before "approved" now exempt a sentence. Also found: a one-word answer is released only at the end, so `first_token_ms` is now recorded there too. Live through the app: a grounded answer streamed in 20 pieces; `gemma3:1b`'s "No, the documents do not contain enough information" passed. The Apple Silicon `Yes.` itself could not be re-run here; the same answer is covered by unit and pipeline tests.
+
+---
+
+## TS-018: Budget ignored evidence labels; cut-off streams reported as finished; malformed token counts became internal errors
+
+- **Date:** 2026-10-09
+- **Phase:** External review report (findings R4, R1, R6)
+- **Related:** REQ-055, REQ-071, REQ-076, REQ-068, REQ-022, ADR-007
+
+**Symptoms (all reproduced here).**
+1. **R4:** 180 short documents and the question "annual leave": selection used 1,070 of 1,500 evidence tokens, but the assembled prompt needed 5,263 tokens against a 3,584 limit, so a short question got `question_too_long`.
+2. **R1:** a model stream that ended after some text, without `[DONE]` or a finish reason, ended in `done` with `finish_reason: unknown`: an interrupted answer shown as complete. An existing test (`test_edge_missing_done_marker_still_finishes`) asserted exactly that.
+3. **R6:** `usage.prompt_tokens: "PRIVATE_DOCUMENT_MARKER"` after answer text gave `internal_error` with `partial: false`; the marker appeared in the log, because `int()` put it in the exception message and the catch-all logged the full exception.
+
+**Diagnosis.**
+1. Selection budgeted chunk text only; each block's header (`<<<EVIDENCE id="…" source="…">>>`), end marker and separator add about 18 tokens, unaccounted for.
+2. `stream_chat` treated any end of the HTTP body as completion.
+3. Payload fields were converted without type checks, and the catch-all handler logged `log.exception` (message and traceback) and hard-coded `partial=False`.
+
+**Resolution.**
+1. Prompt assembly provides `block_framing_tokens(chunk_id, path, truncated)`; the pipeline passes it to `select()`, which counts text plus framing. Module dependencies stay one-way (prompt → selection). Estimated separately and rounded up, the counted total is never below the assembled evidence. A budget too small for any label returns `evidence_too_large` (fixed reply, model not called) instead of empty evidence. Two observability tests with 6- and 7-token budgets were raised to 26 and 30, as their budgets could no longer fit a single label.
+2. A stream must end with `[DONE]` or a non-empty finish reason; otherwise `model_stream_failed`, with `started` (so `partial`) preserved. The old test was replaced by tests of the new contract.
+3. Every payload field is type-checked; a wrong shape raises `model_stream_failed` without upstream values; malformed `usage` is ignored, so counts fall back to labelled estimates. The catch-all logs only the exception class and `file:line in function`, and sets `partial` from the text already sent.
+
+**Verified.** 30 new tests; with the fixes removed, 19 fail. Live through the app with Ollama in Compose: answers still complete normally (`finish_reason: stop`; Ollama sends both signals); the 180-document question is answered with 1,485 of 1,500 tokens used and 136 chunks dropped.
+
+**Remaining limitation.** Without a traceback in the logs, an unexpected bug is harder to diagnose; the class and location are logged, and the request can be reproduced.

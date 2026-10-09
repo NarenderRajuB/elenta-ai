@@ -108,7 +108,7 @@ sequenceDiagram
 | 1 | Validate | Question must be 1–8,000 characters and not only whitespace. Failures are answered as JSON before any stream starts | ADR-004 |
 | 2 | Start trace | Root span `chat.request`; its trace id becomes the request id on every event and log line | ADR-008 |
 | 3 | Refresh | Section 1. Span `corpus.refresh` | ADR-005 |
-| 4 | Select | Question reduced to meaningful words; chunks scored with BM25; filled into `CONTEXT_TOKEN_BUDGET` (1,500 estimated tokens) in rank order. Span `evidence.selection` | ADR-007 |
+| 4 | Select | Question reduced to meaningful words; chunks scored with BM25; filled into `CONTEXT_TOKEN_BUDGET` (1,500 estimated tokens, each chunk counted with its label and delimiters) in rank order. Span `evidence.selection` | ADR-007 |
 | 5 | Sources | The `sources` event lists what was selected, **from selection, not from the model's text**, so attribution can't be removed by a document | ADR-006 C3 |
 | 5a | Competing sources | If two or more files each score at least 80% of the top score, a `notice` event names them before the answer, so a possible conflict is surfaced whatever the model writes | ADR-019 |
 | 6 | Insufficient evidence | Empty corpus, no searchable words or no relevant chunk: a fixed reply, and **the model is not called** | ADR-006 C6 |

@@ -16,6 +16,7 @@
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from typing import TypeGuard
 
 import anyio
 import httpx
@@ -72,6 +73,9 @@ async def stream_chat(
     timeout = httpx.Timeout(connect=connect_timeout, read=read_timeout, write=connect_timeout, pool=connect_timeout)
     started = False
     finish_reason = "unknown"
+    # The stream must say it is complete, with [DONE] or a finish reason: a connection
+    # that simply ends after some text is an interrupted answer, not a finished one (TS-018).
+    completed = False
     deadline = anyio.current_time() + request_timeout
     try:
         async with client.stream("POST", f"{url}/chat/completions", json=body, timeout=timeout) as response:
@@ -86,21 +90,34 @@ async def stream_chat(
                     continue
                 payload = line[5:].strip()
                 if payload == "[DONE]":
+                    completed = True
                     break
                 try:
                     chunk = json.loads(payload)
                 except ValueError:
                     raise InferenceError("model_stream_failed", started=started) from None
-                usage = chunk.get("usage")
-                if isinstance(usage, dict) and "prompt_tokens" in usage:
-                    yield Usage(int(usage.get("prompt_tokens", 0)), int(usage.get("completion_tokens", 0)))
-                for choice in chunk.get("choices") or []:
-                    text = (choice.get("delta") or {}).get("content")
-                    if text:
+                # Every field is type-checked before use: a malformed payload becomes a
+                # fixed error code, never an exception carrying upstream values (TS-018).
+                if not isinstance(chunk, dict):
+                    raise InferenceError("model_stream_failed", started=started)
+                choices = chunk.get("choices") or []
+                if not isinstance(choices, list):
+                    raise InferenceError("model_stream_failed", started=started)
+                usage = _usage(chunk.get("usage"))
+                if usage is not None:
+                    yield usage
+                for choice in choices:
+                    if not isinstance(choice, dict):
+                        raise InferenceError("model_stream_failed", started=started)
+                    delta = choice.get("delta")
+                    text = delta.get("content") if isinstance(delta, dict) else None
+                    if isinstance(text, str) and text:
                         started = True
                         yield TextDelta(text)
-                    if choice.get("finish_reason"):
-                        finish_reason = choice["finish_reason"]
+                    reason = choice.get("finish_reason")
+                    if isinstance(reason, str) and reason:
+                        finish_reason = reason
+                        completed = True
     except InferenceError:
         raise
     except httpx.TimeoutException:
@@ -110,4 +127,21 @@ async def stream_chat(
     except httpx.HTTPError:
         # Connection dropped or protocol error mid-stream.
         raise InferenceError("model_stream_failed", started=started) from None
+    if not completed:
+        raise InferenceError("model_stream_failed", started=started)
     yield Finish(finish_reason)
+
+
+def _is_count(value: object) -> TypeGuard[int]:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _usage(value: object) -> Usage | None:
+    """Reported token counts, or None if absent or malformed (counts are then
+    estimated and labelled as such downstream)."""
+    if not isinstance(value, dict):
+        return None
+    prompt, completion = value.get("prompt_tokens"), value.get("completion_tokens", 0)
+    if _is_count(prompt) and _is_count(completion):
+        return Usage(prompt, completion)
+    return None

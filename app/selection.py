@@ -8,6 +8,9 @@
 #   4. Fill the budget in rank order. A chunk that does not fit is dropped and the
 #      next one is tried, so a smaller lower-ranked chunk can still use the space.
 #      Only if the very first chunk alone exceeds the budget is it truncated.
+#      A chunk costs its text plus its framing in the prompt (label and delimiters),
+#      given by the caller, so the budget holds for evidence as the model receives it:
+#      many short chunks can't overflow the prompt through their labels (TS-018).
 #
 # If nothing qualifies, the Selection says why (empty corpus, no meaningful words,
 # no relevant chunk) so the caller can answer "not enough evidence" without asking
@@ -19,6 +22,7 @@
 # the top score. If two or more files compete, they are reported so the caller can tell
 # the user to check them, without choosing between them (no precedence, ADR-009).
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from app.index import Bm25Index, query_terms
@@ -39,8 +43,16 @@ class SelectedChunk:
     rel_path: str
     text: str
     score: float
-    estimated_tokens: int
+    estimated_tokens: int  # text plus its framing in the prompt
     truncated: bool
+
+
+# (chunk_id, rel_path, truncated) -> estimated tokens of a chunk's framing in the prompt.
+FramingCost = Callable[[str, str, bool], int]
+
+
+def _no_framing(chunk_id: str, rel_path: str, truncated: bool) -> int:
+    return 0
 
 
 @dataclass(frozen=True)
@@ -54,7 +66,8 @@ class DroppedChunk:
 class Selection:
     chunks: tuple[SelectedChunk, ...]
     # None when evidence was found; otherwise one of: empty_corpus,
-    # no_meaningful_terms, no_relevant_evidence.
+    # no_meaningful_terms, no_relevant_evidence, evidence_too_large (relevant chunks
+    # exist, but not even the best one's framing fits the budget).
     insufficient_reason: str | None
     query_terms: tuple[str, ...]
     budget_tokens: int
@@ -83,7 +96,9 @@ def _empty(reason: str, terms: list[str], budget: int, considered: int = 0) -> S
     return Selection((), reason, tuple(terms), budget, 0, considered, 0, ())
 
 
-def select(index: Bm25Index, question: str, budget_tokens: int, min_score: float) -> Selection:
+def select(
+    index: Bm25Index, question: str, budget_tokens: int, min_score: float, framing_tokens: FramingCost = _no_framing
+) -> Selection:
     terms = query_terms(question)
     if len(index) == 0:
         return _empty("empty_corpus", terms, budget_tokens)
@@ -102,15 +117,18 @@ def select(index: Bm25Index, question: str, budget_tokens: int, min_score: float
     dropped: list[DroppedChunk] = []
     used = 0
     for score, chunk in ranked:
-        tokens = estimate_tokens(chunk.text)
+        tokens = estimate_tokens(chunk.text) + framing_tokens(chunk.chunk_id, chunk.rel_path, False)
         if used + tokens <= budget_tokens:
             chosen.append(SelectedChunk(chunk.chunk_id, chunk.rel_path, chunk.text, round(score, 4), tokens, False))
             used += tokens
-        elif not chosen:
-            # The best chunk alone is over budget: keep its beginning rather than
-            # sending nothing. Marked truncated so it is visible to the user and trace.
-            text = chunk.text[: max_chars_for_tokens(budget_tokens)]
-            cut_tokens = estimate_tokens(text)
+            continue
+        # The best chunk alone is over budget: keep its beginning rather than sending
+        # nothing, leaving room for its framing. Marked truncated so it is visible to
+        # the user and trace.
+        room = budget_tokens - framing_tokens(chunk.chunk_id, chunk.rel_path, True)
+        if not chosen and room > 0:
+            text = chunk.text[: max_chars_for_tokens(room)]
+            cut_tokens = estimate_tokens(text) + framing_tokens(chunk.chunk_id, chunk.rel_path, True)
             chosen.append(SelectedChunk(chunk.chunk_id, chunk.rel_path, text, round(score, 4), cut_tokens, True))
             used += cut_tokens
         else:
@@ -118,7 +136,7 @@ def select(index: Bm25Index, question: str, budget_tokens: int, min_score: float
 
     return Selection(
         chunks=tuple(chosen),
-        insufficient_reason=None,
+        insufficient_reason=None if chosen else "evidence_too_large",
         query_terms=tuple(terms),
         budget_tokens=budget_tokens,
         used_tokens=used,

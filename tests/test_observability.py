@@ -161,13 +161,13 @@ class TestSpanContent:
         assert "You are a document question-answering assistant" not in dump
 
     def test_positive_dropped_chunks_listed_in_rank_order_with_scores(self, tmp_path):
-        # Small chunks and budget: one chunk fits, the other two are dropped.
+        # Budget for one chunk with its framing (about 18 tokens each); the other two drop.
         spans, events, all_spans = run_chat(
             tmp_path,
             "annual leave",
             lambda r: httpx.Response(200, content=sse("ok")),
             files={"a.md": "annual leave annual leave", "b.md": "annual leave days", "c.md": "leave rules apply here"},
-            extra_env={"CONTEXT_TOKEN_BUDGET": "7"},
+            extra_env={"CONTEXT_TOKEN_BUDGET": "30"},
         )
         attrs = spans["evidence.selection"].attributes
         ids, scores = list(attrs["selection.dropped_chunk_ids"]), list(attrs["selection.dropped_scores"])
@@ -191,7 +191,7 @@ class TestSpanContent:
             "annual leave",
             lambda r: httpx.Response(200, content=sse("ok")),
             files=files,
-            extra_env={"CONTEXT_TOKEN_BUDGET": "6"},
+            extra_env={"CONTEXT_TOKEN_BUDGET": "26"},
         )
         attrs = spans["evidence.selection"].attributes
         assert attrs["selection.dropped_chunks"] == DROPPED_DETAIL_LIMIT + 4  # all but the one selected

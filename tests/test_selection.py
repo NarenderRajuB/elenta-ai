@@ -11,6 +11,7 @@ from app.chunking import chunk_document, chunk_text
 from app.corpus import Corpus
 from app.index import STOP_WORDS, Bm25Index, IndexCache, query_terms
 from app.ingestion import Document, Fingerprint
+from app.prompt import PromptTooLarge, assemble, block_framing_tokens
 from app.selection import COMPETING_SCORE_RATIO, DROPPED_DETAIL_LIMIT, SelectedChunk, competing_files, select
 from app.tokens import METHOD, estimate_tokens
 
@@ -351,3 +352,60 @@ class TestReq054CompetingSources:
 
     def test_edge_empty_input(self):
         assert competing_files([]) == ()
+
+
+# ---------------------------------------------------------------------------
+# REQ-055 / REQ-071: the budget counts each chunk as the model receives it (TS-018)
+# ---------------------------------------------------------------------------
+
+
+MANY_SHORT = {f"policy-{i:03}.md": f"Annual leave note {i}." for i in range(180)}
+
+
+class TestBudgetIncludesFraming:
+    def test_positive_many_short_chunks_fit_the_prompt(self, tmp_path):
+        # External review R4: 180 short documents overflowed the prompt through their labels.
+        sel = select(index_for(tmp_path, MANY_SHORT), "annual leave", 1500, 0.0, framing_tokens=block_framing_tokens)
+        assert sel.used_tokens <= 1500 and sel.dropped_count > 0
+        assemble("annual leave", sel, 4096, 512)  # no PromptTooLarge
+
+    def test_positive_chunk_cost_is_text_plus_framing(self, tmp_path):
+        sel = select(index_for(tmp_path, {"leave.md": LEAVE}), "annual leave", 1500, 0.0, block_framing_tokens)
+        chunk = sel.chunks[0]
+        framing = block_framing_tokens(chunk.chunk_id, chunk.rel_path, False)
+        assert (
+            chunk.estimated_tokens == estimate_tokens(chunk.text) + framing
+            and sel.used_tokens == chunk.estimated_tokens
+        )
+
+    def test_negative_without_framing_the_reported_overflow_returns(self, tmp_path):
+        # Documents why the framing cost is passed in: text-only budgeting overflows.
+        sel = select(index_for(tmp_path, MANY_SHORT), "annual leave", 1500, 0.0)
+        with pytest.raises(PromptTooLarge):
+            assemble("annual leave", sel, 4096, 512)
+
+    def test_negative_budget_too_small_for_any_framing(self, tmp_path):
+        sel = select(index_for(tmp_path, {"leave.md": LEAVE}), "annual leave", 5, 0.0, block_framing_tokens)
+        assert sel.insufficient_reason == "evidence_too_large" and sel.chunks == () and sel.dropped_count == 1
+
+    def test_edge_truncated_top_chunk_leaves_room_for_its_framing(self, tmp_path):
+        long_text = "annual leave " * 400
+        sel = select(
+            index_for(tmp_path, {"long.md": long_text}, chunk_chars=10_000),
+            "annual leave",
+            100,
+            0.0,
+            block_framing_tokens,
+        )
+        chunk = sel.chunks[0]
+        assert chunk.truncated and sel.used_tokens <= 100
+        assert chunk.estimated_tokens == estimate_tokens(chunk.text) + block_framing_tokens(
+            chunk.chunk_id, "long.md", True
+        )
+
+    def test_edge_framing_estimate_never_below_the_assembled_evidence(self, tmp_path):
+        files = {f"dir/sub/{i}.md": f"Annual leave rule {i} applies." for i in range(30)}
+        sel = select(index_for(tmp_path, files), "annual leave", 1500, 0.0, block_framing_tokens)
+        evidence = assemble("annual leave", sel, 4096, 512).messages[1]["content"]
+        header = evidence.split("\n\n", 1)[0]
+        assert estimate_tokens(evidence) <= estimate_tokens(header) + sel.used_tokens

@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.corpus import Corpus
 from app.index import IndexCache
 from app.output_guard import APPROVAL_REFUSAL, REFUSAL, ApprovalGuard, OutputGuard
-from app.prompt import QUOTABLE_RULES, assemble
+from app.prompt import QUOTABLE_RULES, assemble, block_framing_tokens
 from app.selection import select
 
 CORPUS = {
@@ -108,7 +108,7 @@ CASES = [
 
 
 def run_case(client: httpx.Client, url: str, model: str, index, question: str, temperature: float) -> tuple[str, bool]:
-    selection = select(index, question, 1500, 0.0)
+    selection = select(index, question, 1500, 0.0, framing_tokens=block_framing_tokens)
     if not selection.sufficient:
         return f"(no model call: {selection.insufficient_reason})", False
     prompt = assemble(question, selection, 4096, 512)

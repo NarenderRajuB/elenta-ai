@@ -29,6 +29,7 @@
 
 import logging
 import time
+import traceback
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -44,7 +45,7 @@ from app.index import IndexCache
 from app.inference import Finish, InferenceError, TextDelta, Usage, stream_chat
 from app.observability import REQUEST_ID, llm_backend_attributes
 from app.output_guard import APPROVAL_REFUSAL, REFUSAL, ApprovalGuard, OutputGuard
-from app.prompt import QUOTABLE_RULES, PromptTooLarge, assemble
+from app.prompt import QUOTABLE_RULES, PromptTooLarge, assemble, block_framing_tokens
 from app.selection import select
 from app.tokens import METHOD as TOKEN_METHOD
 from app.tokens import estimate_tokens
@@ -56,6 +57,7 @@ INSUFFICIENT_REPLIES = {
     "empty_corpus": "There are no readable documents in the corpus, so I can't answer this.",
     "no_meaningful_terms": "Please ask a question about the documents. I couldn't find any searchable words in it.",
     "no_relevant_evidence": "The documents do not contain enough information to answer this question.",
+    "evidence_too_large": "The matching evidence doesn't fit the configured context budget (CONTEXT_TOKEN_BUDGET).",
 }
 ERROR_MESSAGES = {
     "model_unavailable": "The language model is not reachable. Please try again shortly.",
@@ -114,6 +116,7 @@ async def answer(question: str, deps: ChatDeps) -> AsyncIterator[dict]:
     timings: dict[str, float] = {}
     started_at = time.perf_counter()
     outcome = "client_disconnected"  # overwritten on every normal or error exit
+    emitted_chars = 0  # answer characters already sent; decides `partial` on any error
     open_spans: list[trace.Span] = []
 
     def stage(name: str) -> trace.Span:
@@ -155,7 +158,9 @@ async def answer(question: str, deps: ChatDeps) -> AsyncIterator[dict]:
         span = stage("evidence.selection")
         t = time.perf_counter()
         index = await anyio.to_thread.run_sync(deps.index_cache.get, snapshot)
-        selection = select(index, question, s.context_token_budget, s.selection_min_score)
+        selection = select(
+            index, question, s.context_token_budget, s.selection_min_score, framing_tokens=block_framing_tokens
+        )
         timings["selection_ms"] = _ms(t)
         span.set_attributes(
             {
@@ -274,7 +279,6 @@ async def answer(question: str, deps: ChatDeps) -> AsyncIterator[dict]:
         approval = ApprovalGuard(question)  # C9, on the text the leak/reasoning guard releases
         usage: Usage | None = None
         finish_reason = "unknown"
-        emitted_chars = 0
         span = stage("inference.stream")
         span.set_attributes(
             {
@@ -381,12 +385,16 @@ async def answer(question: str, deps: ChatDeps) -> AsyncIterator[dict]:
             },
         }
     except Exception as exc:
-        # Unexpected bug: still end the stream with a terminal event carrying the id.
-        # The trace gets the exception class only; its message could contain data.
-        log.exception("chat failed")
+        # Unexpected bug: still end the stream with a terminal event carrying the id,
+        # saying whether answer text was already shown. Logs and trace get the exception
+        # class and where it was raised, never its message or a traceback: those can
+        # carry document or upstream text (REQ-068, TS-018).
+        frame = traceback.extract_tb(exc.__traceback__)[-1] if exc.__traceback__ else None
+        where = f"{frame.filename.rsplit('/', 1)[-1]}:{frame.lineno} in {frame.name}" if frame else "unknown"
+        log.error("chat failed", extra={"error_type": type(exc).__name__, "where": where})
         outcome = "internal_error"
         root.set_attribute("error.type", type(exc).__name__)
-        yield _error(request_id, outcome, partial=False)
+        yield _error(request_id, outcome, partial=emitted_chars > 0)
     finally:
         # Runs on normal completion, on errors and when the client disconnects (the
         # generator is closed; outcome stays "client_disconnected"). Every span is

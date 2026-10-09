@@ -95,6 +95,22 @@ def _evidence_block(chunk) -> str:
     )
 
 
+@dataclass(frozen=True)
+class _Frame:
+    chunk_id: str
+    rel_path: str
+    text: str
+    truncated: bool
+
+
+def block_framing_tokens(chunk_id: str, rel_path: str, truncated: bool) -> int:
+    """Estimated tokens of a chunk's block around its text: header, delimiters and the
+    blank line separating it from the next block. Given to selection so the evidence
+    budget counts evidence as the model receives it (TS-018). Estimated separately from
+    the text, so (with rounding up) the sum is never below the assembled block."""
+    return estimate_tokens(_evidence_block(_Frame(chunk_id, rel_path, "", truncated)) + "\n\n")
+
+
 def prompt_limit(context_tokens: int, max_answer_tokens: int) -> int:
     """Tokens available for the prompt once the answer allowance is reserved."""
     return context_tokens - max_answer_tokens

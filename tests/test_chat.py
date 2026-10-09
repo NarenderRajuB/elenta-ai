@@ -160,6 +160,22 @@ class TestGroundedAnswer:
 # ---------------------------------------------------------------------------
 
 
+class TestBudgetOnLivePath:
+    def test_positive_many_short_documents_answered_not_rejected(self, tmp_path):
+        # External review R4: a short question got question_too_long from evidence labels.
+        files = {f"policy-{i:03}.md": f"Annual leave note {i}." for i in range(180)}
+        up = Upstream(lambda r: httpx.Response(200, content=sse_body("25 days.")))
+        _, events = ask(tmp_path, files, "annual leave", up)
+        assert "error" not in names(events) and dict(events)["done"]["finish_reason"] == "stop"
+        assert dict(events)["sources"]["used_tokens"] <= 1500 and dict(events)["sources"]["dropped_chunks"] > 0
+
+    def test_negative_budget_below_framing_gives_fixed_reply_without_model(self, tmp_path):
+        up = Upstream(lambda r: httpx.Response(200, content=sse_body("SHOULD NOT APPEAR")))
+        _, events = ask(tmp_path, {"leave.md": LEAVE}, "annual leave", up, CONTEXT_TOKEN_BUDGET="5")
+        assert up.requests == [] and answer_text(events) == INSUFFICIENT_REPLIES["evidence_too_large"]
+        assert dict(events)["sources"]["insufficient_reason"] == "evidence_too_large"
+
+
 class TestNoEvidence:
     @pytest.mark.parametrize(
         "files, question, reason",
@@ -336,6 +352,55 @@ class TestModelFailures:
 # ---------------------------------------------------------------------------
 # Request validation (before any stream starts)
 # ---------------------------------------------------------------------------
+
+
+class TestIncompleteAndMalformedStreams:
+    def test_negative_stream_cut_off_after_text_is_a_partial_failure(self, tmp_path):
+        # External review R1: this used to end with `done` as if the answer were complete.
+        body = f"data: {json.dumps({'choices': [{'delta': {'content': 'Employees receive 25 da'}}]})}\n\n".encode()
+        up = Upstream(lambda r: httpx.Response(200, content=body))
+        _, events = ask(tmp_path, {"leave.md": LEAVE}, "annual leave", up)
+        assert answer_text(events) == "Employees receive "  # shown before the cut
+        assert names(events)[-1] == "error" and "done" not in names(events)
+        error = dict(events)["error"]
+        assert error["code"] == "model_stream_failed" and error["partial"] is True
+
+    def test_negative_malformed_usage_after_text_does_not_fail_the_answer(self, tmp_path, caplog):
+        # External review R6: an invalid usage value became internal_error and was logged.
+        body = (
+            sse_body("25 days.", usage=None)
+            + (
+                f"data: {json.dumps({'choices': [], 'usage': {'prompt_tokens': 'PRIVATE_DOCUMENT_MARKER'}})}\n\n"
+            ).encode()
+        )
+        up = Upstream(lambda r: httpx.Response(200, content=body))
+        with caplog.at_level("DEBUG"):
+            _, events = ask(tmp_path, {"leave.md": LEAVE}, "annual leave", up)
+        done = dict(events)["done"]
+        assert answer_text(events) == "25 days." and done["tokens"]["source"].startswith("estimated")
+        assert "PRIVATE_DOCUMENT_MARKER" not in caplog.text
+
+    def test_edge_unexpected_error_after_text_is_partial_and_logged_without_values(self, tmp_path, caplog, monkeypatch):
+        from app import chat as chat_module
+
+        original = chat_module.ApprovalGuard.feed
+        calls = {"n": 0}
+
+        def failing_feed(self, text):
+            calls["n"] += 1
+            if calls["n"] == 3:
+                raise RuntimeError("PRIVATE_DOCUMENT_MARKER")
+            return original(self, text)
+
+        monkeypatch.setattr(chat_module.ApprovalGuard, "feed", failing_feed)
+        up = Upstream(lambda r: httpx.Response(200, content=sse_body("Employees ", "receive ", "25 ", "days.")))
+        with caplog.at_level("DEBUG"):
+            _, events = ask(tmp_path, {"leave.md": LEAVE}, "annual leave", up)
+        error = dict(events)["error"]
+        assert answer_text(events) and error["code"] == "internal_error" and error["partial"] is True
+        record = next(r for r in caplog.records if r.getMessage() == "chat failed")
+        assert record.exc_info is None and record.error_type == "RuntimeError" and "chat.py:" in record.where
+        assert "PRIVATE_DOCUMENT_MARKER" not in caplog.text
 
 
 class TestValidation:

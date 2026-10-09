@@ -36,7 +36,7 @@ The app writes **one JSON object per line** to stderr, for every logger includin
 | `model call failed` | WARNING | The model was unreachable, timed out or failed; has the error code and whether text was already sent |
 | `output guard blocked instruction leak` | WARNING | The answer started reproducing the system instructions and was replaced by a refusal |
 | `output guard removed reasoning` | INFO | Reasoning blocks were removed from an answer |
-| `chat failed` | ERROR | An unexpected bug; includes the stack trace |
+| `chat failed` | ERROR | An unexpected bug; `error_type` and `where` (file:line and function), never the message or a traceback (TS-018) |
 | `127.0.0.1:… - "GET /healthz HTTP/1.1" 200` (logger `uvicorn.access`) | INFO | Every HTTP request, including the Compose health check every 10 seconds; method, path and status only |
 | `Transient error …` / `Failed to export spans batch …` (logger `opentelemetry…`) | WARNING / ERROR | Jaeger is not reachable; answers are unaffected |
 

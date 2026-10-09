@@ -162,8 +162,66 @@ def test_edge_no_usage_reported_is_fine():
     assert not any(isinstance(i, Usage) for i in items) and items[-1] == Finish("stop")
 
 
-def test_edge_missing_done_marker_still_finishes():
-    items = run(lambda r: httpx.Response(200, content=sse(delta("ok"), done=False)))
+def test_negative_stream_ending_without_completion_signal_fails():
+    # External review R1: a connection that just ends after some text is an interrupted
+    # answer. (It used to be reported as finished, with reason "unknown".)
+    with pytest.raises(InferenceError) as err:
+        run(lambda r: httpx.Response(200, content=sse(delta("25 da"), done=False)))
+    assert err.value.code == "model_stream_failed" and err.value.started is True
+
+
+def test_negative_empty_stream_fails_as_not_started():
+    with pytest.raises(InferenceError) as err:
+        run(lambda r: httpx.Response(200, content=b""))
+    assert err.value.code == "model_stream_failed" and err.value.started is False
+
+
+def test_edge_finish_reason_without_done_marker_completes():
+    # Either signal is enough: some servers end after the finish reason.
+    items = run(lambda r: httpx.Response(200, content=sse(delta("ok", finish="stop"), done=False)))
+    assert items == [TextDelta("ok"), Finish("stop")]
+
+
+def test_edge_done_marker_without_finish_reason_completes():
+    items = run(lambda r: httpx.Response(200, content=sse(delta("ok"))))
+    assert items == [TextDelta("ok"), Finish("unknown")]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    ["1", "[]", '"text"', '{"choices": 5}', '{"choices": [5]}', '{"choices": "abc"}'],
+)
+def test_negative_malformed_payload_shapes_fail_cleanly(payload):
+    # External review R6: wrong types became internal errors carrying upstream values.
+    body = sse(delta("ok"), done=False) + f"data: {payload}\n\ndata: [DONE]\n\n".encode()
+    with pytest.raises(InferenceError) as err:
+        run(lambda r: httpx.Response(200, content=body))
+    assert err.value.code == "model_stream_failed" and err.value.started is True
+    assert "PRIVATE" not in str(err.value)
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"prompt_tokens": "PRIVATE_DOCUMENT_MARKER", "completion_tokens": 1},
+        {"prompt_tokens": 10, "completion_tokens": None},
+        {"prompt_tokens": True, "completion_tokens": 1},
+        {"prompt_tokens": -1, "completion_tokens": 1},
+        {"prompt_tokens": 1.5, "completion_tokens": 1},
+        "not a dict",
+    ],
+)
+def test_edge_malformed_usage_is_ignored_not_fatal(usage):
+    # Counts then fall back to labelled estimates; the answer itself is unaffected.
+    body = sse(delta("ok"), {"choices": [], "usage": usage})
+    items = run(lambda r: httpx.Response(200, content=body))
+    assert items == [TextDelta("ok"), Finish("unknown")]
+
+
+@pytest.mark.parametrize("choice", [{"delta": "text"}, {"delta": {"content": 5}}, {"delta": None}, {}])
+def test_edge_odd_but_harmless_choice_fields_ignored(choice):
+    body = sse({"choices": [choice]}, delta("ok"))
+    items = run(lambda r: httpx.Response(200, content=body))
     assert items == [TextDelta("ok"), Finish("unknown")]
 
 

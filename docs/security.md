@@ -115,6 +115,6 @@ Stated plainly, as the brief asks. Each is accepted for this scope, with the rea
 3. **The reasoning filter (C5) knows two markers.** Reasoning in another format would be shown.
 4. **Conflicts are flagged by score, not detected.** The notice names documents that match equally well (ADR-019); a conflicting document that scores lower isn't named, and the answer text may still give one value.
 5. **No authentication**, by design for one local user (see Network assumptions).
-6. **Unexpected errors are logged with their stack trace and message**, which could include data from the failing operation. Traces record only the exception class.
+6. **Unexpected errors are logged without detail**: only the exception class and the file and line where it was raised, never the message or a traceback, which could include document or upstream text (TS-018). This makes diagnosis slower: reproduce with the same request to see more.
 7. **Known vulnerabilities without a fix** remain in the Debian base image (164 findings, 0 critical; TS-009). Scan results are a snapshot: re-run `scripts/verify.sh` to pick up new findings.
 8. **The Ollama binary has 43 known HIGH vulnerabilities with upstream fixes** (Go standard library and `x/crypto`/`x/net` versions it was built with). Only an Ollama release can fix them; the container publishes no port, drops all capabilities and is reachable only by the app, so this is accepted and reported on every verification run (TS-016).

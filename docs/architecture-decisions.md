@@ -230,6 +230,7 @@ Template:
 - **Relevance floor** `SELECTION_MIN_SCORE` (default 0, meaning at least one meaningful word in common). If nothing qualifies, selection returns `empty_corpus`, `no_meaningful_terms` or `no_relevant_evidence`, so the "insufficient evidence" answer can be given **without asking the model**.
 - **Budget fill:** rank order. A chunk that doesn't fit is dropped and the next is tried, so smaller chunks can use the space. The top chunk is truncated only if it alone exceeds the budget, and is marked `truncated`. The dropped count is always recorded, with the first 10 dropped IDs and scores listed.
 - **Index cache:** rebuilt only when the snapshot version changes. Per-document chunk statistics are cached by (path, sha256); the cache dict is replaced on rebuild, which evicts deleted documents.
+- **Revised 2026-10-09 (TS-018):** the budget counts each chunk with its label and delimiters as they appear in the prompt (cost given by prompt assembly), and a budget too small for any label gives `evidence_too_large`.
 
 **Measured cost (2026-10-08, Intel i7-8850H).** A 19 MB file (28,000 chunks): read 0.10 s, index build **2.5 s**, selection 5 ms, peak memory **~630 MB**. Extrapolating linearly to the candidate's 100 MB per-file limit gives roughly **13 s** to index one such file and **~3 GB** of memory. The first request after such a file changes would wait for the rebuild. This is a known limitation, accepted with the 100 MB limit; lowering `CORPUS_MAX_FILE_BYTES` is the operational lever.
 

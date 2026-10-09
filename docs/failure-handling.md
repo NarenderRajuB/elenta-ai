@@ -21,7 +21,7 @@ Every diagnostic below can be found from the **request id** shown under the answ
 The corpus can be far larger than the model's 4,096-token window; only a bounded amount of evidence is ever sent (ADR-007).
 
 **What happens**
-- Evidence is chosen by BM25 rank and added until `CONTEXT_TOKEN_BUDGET` (1,500 estimated tokens) is full. A chunk that doesn't fit is **left out and recorded**, and the next one is tried. Only if the single best chunk is bigger than the whole budget is it **cut, and marked truncated**.
+- Evidence is chosen by BM25 rank and added until `CONTEXT_TOKEN_BUDGET` (1,500 estimated tokens) is full. Each chunk counts **as it appears in the prompt**, text plus its label and delimiters, so many short chunks can't overflow the prompt through their labels (TS-018). A chunk that doesn't fit is **left out and recorded**, and the next one is tried. Only if the single best chunk is bigger than the whole budget is it **cut, and marked truncated**, leaving room for its label.
 - Before calling the model, the whole prompt (instructions + evidence + question) is checked against `LLM_CONTEXT_TOKENS − LLM_MAX_TOKENS`. If it doesn't fit, the request is **rejected, never truncated**.
 - At startup, the app checks the worst case fits (instructions + full budget + 100 question tokens); if not, it exits with code 2 and says which settings to lower ([Configuration](configuration.md#rules-that-combine-settings)).
 
@@ -121,6 +121,7 @@ followed by the model's answer (in evaluation, *"Up to 2 days per week."*) and b
 |---|---|---|
 | `empty_corpus` | No readable documents | *"There are no readable documents in the corpus, so I can't answer this."* |
 | `no_meaningful_terms` | Question has only stop words or punctuation | *"Please ask a question about the documents. I couldn't find any searchable words in it."* |
+| `evidence_too_large` | Chunks match, but the budget is too small for even the best one's label (only with a very small `CONTEXT_TOKEN_BUDGET`) | *"The matching evidence doesn't fit the configured context budget (CONTEXT_TOKEN_BUDGET)."* |
 | `no_relevant_evidence` | No chunk shares a meaningful word with the question | *"The documents do not contain enough information to answer this question."* |
 
 **Diagnostics:** `sources.insufficient_reason`; `done` with `finish_reason: insufficient_evidence` and `model_called: false`; log `evidence selected` with the reason; trace `selection.insufficient_reason`, `chat.model_called: false`, and no `prompt.assembly` or `inference.stream` span.
@@ -138,7 +139,7 @@ followed by the model's answer (in evaluation, *"Up to 2 days per week."*) and b
 | Model server not running / connection refused | `model_unavailable` | false | *"The language model is not reachable. Please try again shortly."* |
 | Connect, first-piece or between-piece timeout, or whole-call limit | `model_timeout` | true if text was already shown | *"The language model took too long to respond."* |
 | Server answers with an error status (e.g. 404 for an unknown model) | `model_http_error` | false | *"The language model returned an error."* |
-| Connection drops or stream is malformed mid-answer | `model_stream_failed` | true if text was already shown | *"The answer was interrupted because the language model stream failed."* |
+| Connection drops, the stream ends without saying it is complete (`[DONE]` or a finish reason), or a payload is malformed | `model_stream_failed` | true if text was already shown | *"The answer was interrupted because the language model stream failed."* |
 
 When `partial` is true the browser keeps the text received so far and adds *"The answer above is incomplete."* Every error shows the request id.
 
@@ -149,6 +150,7 @@ When `partial` is true the browser keeps the text received so far and adds *"The
 **Related, also handled:**
 - **Answer cut off by the length limit:** the answer ends at `LLM_MAX_TOKENS` (512) and the request line shows finish reason `length`.
 - **Browser closed or Stop pressed** (REQ-033): the response, the pipeline and the upstream model call are all closed, so the model stops generating. The trace still ends, with outcome `client_disconnected`.
-- **Unexpected bug:** `error` event `internal_error` with the request id; the stack trace is logged and the trace records the exception class.
+- **Unexpected bug:** `error` event `internal_error` with the request id and the correct `partial` flag; the log and trace record the exception class and where it was raised, never its message (TS-018).
+- **Malformed token counts** from the server are ignored; the counts shown are then the labelled estimates.
 
 **Tests:** `tests/test_inference.py`, `tests/test_chat.py::TestModelFailures`, `tests/test_health.py`, `tests/test_streaming_e2e.py`, `tests/test_observability.py::TestFailureTraces`.

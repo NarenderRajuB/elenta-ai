@@ -88,7 +88,7 @@ Exactly one terminal event (`done` or `error`) ends every stream.
 | `model_unavailable` | Model server not reachable |
 | `model_timeout` | No data for `LLM_READ_TIMEOUT_SECONDS`, or the whole call exceeded `LLM_REQUEST_TIMEOUT_SECONDS` |
 | `model_http_error` | Model server answered with an error status |
-| `model_stream_failed` | Stream broke off or was malformed (usually `partial: true`) |
+| `model_stream_failed` | Stream broke off, ended without `[DONE]` or a finish reason, or was malformed (usually `partial: true`) |
 | `question_too_long` | Prompt wouldn't fit the context window |
 | `internal_error` | Unexpected bug; logged with the request id |
 
@@ -218,7 +218,7 @@ Run a single requirement's tests, for example:
 uv run pytest -v tests/test_config.py::TestReq016FailFast
 ```
 
-Current result: **653 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Test-only dev dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The other dev tools are listed below. The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
+Current result: **683 passed, 0 warnings** (default run) and **15 passed** (`-m container`). Test-only dev dependencies: `pytest`, and `httpx2` for FastAPI's test client (TS-003). The other dev tools are listed below. The tests start local servers on `127.0.0.1` only and need neither Ollama nor internet.
 
 ## Code quality and security checks (REQ-120..123)
 
@@ -287,7 +287,7 @@ Every variable, its accepted values, the rules that combine them and the four th
 2. Every chunk is scored with **BM25**: more question words, rarer words and shorter chunks score higher.
 3. Chunks scoring above `SELECTION_MIN_SCORE` are ranked (ties broken by chunk ID, so results are reproducible).
 4. Chunks are added in rank order until `CONTEXT_TOKEN_BUDGET` is reached. A chunk that doesn't fit is dropped and the next one tried. Only if the top chunk alone is too big is it **truncated**, and then it is marked as such.
-5. If nothing qualifies, the result says why: `empty_corpus`, `no_meaningful_terms` or `no_relevant_evidence`. The chat feature will answer "not enough evidence" **without calling the model**.
+5. If nothing qualifies, the result says why: `empty_corpus`, `no_meaningful_terms`, `evidence_too_large` or `no_relevant_evidence`. The chat feature will answer "not enough evidence" **without calling the model**.
 
 **Chunk IDs** look like `policies/leave.md#2:9f3c1a07`: file, position, and a hash of the exact text. Editing the text changes the ID.
 
@@ -631,6 +631,18 @@ Tests: `tests/test_selection.py::TestReq055Budget`
 | ⚠️ | Budget of 1 token | Truncated, ≤ 1 token |
 | ⚠️ | Several chunks from one file | Source files listed once, in rank order |
 
+### Evidence budget counts labels and delimiters (REQ-055 / REQ-071, TS-018)
+Code: `app/selection.py` (`framing_tokens`), `app/prompt.py` (`block_framing_tokens`) · Tests: `tests/test_selection.py::TestBudgetIncludesFraming`, `tests/test_chat.py::TestBudgetOnLivePath`
+
+| Type | Scenario | Expected |
+|---|---|---|
+| ✅ | 180 short documents, question "annual leave" (external review R4) | Answered; evidence ≤ 1,500 including labels; extra chunks dropped and counted |
+| ✅ | A chunk's cost | Text plus its label and delimiters |
+| ❌ | Same corpus without framing costs | Prompt overflows (`PromptTooLarge`): why the cost is passed in |
+| ❌ | Budget smaller than one chunk's label | `evidence_too_large`, fixed reply, model not called |
+| ⚠️ | Best chunk over budget | Truncated so text plus label fit |
+| ⚠️ | 30 chunks in nested folders | Assembled evidence never larger than the counted budget |
+
 ### Token estimation (REQ-083, estimate side)
 Tests: `tests/test_selection.py::TestTokenEstimate`
 
@@ -799,6 +811,11 @@ Tests: `tests/test_chat.py::TestModelFailures`, `tests/test_inference.py`
 | ❌ | HTTP 400/404/500/503 | `error` `model_http_error` |
 | ❌ | Stream drops after text was sent | `error` `model_stream_failed`, `partial: true`; partial text kept |
 | ❌ | Malformed JSON in stream | `model_stream_failed` |
+| ❌ | Stream ends after text without `[DONE]` or a finish reason | `model_stream_failed`, `partial: true` (it used to be reported as finished, TS-018) |
+| ❌ | Payload of the wrong shape (`1`, `[]`, `choices` not a list…) | `model_stream_failed`, no upstream value in the error |
+| ⚠️ | Malformed `usage` (`"PRIVATE…"`, `null`, negative, boolean) | Ignored; counts become labelled estimates; nothing logged |
+| ⚠️ | Finish reason without `[DONE]`, or `[DONE]` without finish reason | Completes normally |
+| ⚠️ | Unexpected error after text | `internal_error`, `partial: true`; log has class and file:line only |
 | ⚠️ | Upstream error body with secrets | Never shown to the user |
 | ⚠️ | No `[DONE]`; keep-alive comments; empty deltas; `length` finish | Handled |
 | ⚠️ | Request id on the error | Matches `meta` |

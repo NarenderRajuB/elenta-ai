@@ -60,7 +60,7 @@ The three setups, all chosen in `.env` only:
 | Variable | Required | Example (safe) | Default | Accepted values | Effect |
 |---|---|---|---|---|---|
 | `CHUNK_MAX_CHARS` | No | `800` | `800` (about 200 estimated tokens) | Whole number ≥ 1 | Target size of an evidence chunk. Smaller chunks give more precise sources and fit more files into the budget; larger chunks keep more context together |
-| `CONTEXT_TOKEN_BUDGET` | No | `1500` | `1500` | Whole number ≥ 1, smaller than `LLM_CONTEXT_TOKENS`, and must pass the startup fit check below | Most evidence (estimated tokens) placed in the prompt for one question. Chunks are added in rank order until it is full; what was dropped is shown in the `sources` event and the trace |
+| `CONTEXT_TOKEN_BUDGET` | No | `1500` | `1500` | Whole number ≥ 1, smaller than `LLM_CONTEXT_TOKENS`, and must pass the startup fit check below | Most evidence (estimated tokens) placed in the prompt for one question, **counting each chunk as the model receives it**: its text plus its label and delimiters (about 18 tokens per chunk). Chunks are added in rank order until it is full; what was dropped is shown in the `sources` event and the trace. A budget too small for even one chunk's label gives a fixed reply (`evidence_too_large`) |
 | `SELECTION_MIN_SCORE` | No | `0` | `0` | Zero or a positive number | BM25 score a chunk must exceed to count as evidence. `0` means "shares at least one meaningful word with the question". Raising it makes the "not enough information" reply more likely |
 
 ## Server and tracing

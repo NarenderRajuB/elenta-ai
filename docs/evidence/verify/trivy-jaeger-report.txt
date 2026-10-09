@@ -1,12 +1,12 @@
-$ docker run --rm -v /var/folders/r0/d_cqdn6n6n72h2gpccr7vkfh0000gn/T/tmp.KWCDxtfW4u:/scan:ro -v elenta-trivy-cache:/root/.cache/trivy aquasec/trivy@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa image --input /scan/jaeger.tar --scanners vuln --no-progress
-# 2026-10-09T11:38:12Z
+$ docker run --rm -v /var/folders/r0/d_cqdn6n6n72h2gpccr7vkfh0000gn/T/tmp.D1SkRMbfPv:/scan:ro -v elenta-trivy-cache:/root/.cache/trivy aquasec/trivy@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa image --input /scan/jaeger.tar --scanners vuln --no-progress
+# 2026-10-09T11:47:18Z
 
-2026-10-09T11:38:12Z	INFO	[vuln] Vulnerability scanning is enabled
-2026-10-09T11:38:12Z	INFO	Detected OS	family="alpine" version="3.24.2"
-2026-10-09T11:38:12Z	INFO	[alpine] Detecting vulnerabilities...	os_version="3.24" repository="3.24" pkg_num=16
-2026-10-09T11:38:12Z	INFO	Number of language-specific files	num=1
-2026-10-09T11:38:12Z	INFO	[gobinary] Detecting vulnerabilities...
-2026-10-09T11:38:12Z	WARN	Using severities from other vendors for some vulnerabilities. Read https://trivy.dev/docs/v0.75/guide/scanner/vulnerability#severity-selection for details.
+2026-10-09T11:47:18Z	INFO	[vuln] Vulnerability scanning is enabled
+2026-10-09T11:47:19Z	INFO	Detected OS	family="alpine" version="3.24.2"
+2026-10-09T11:47:19Z	INFO	[alpine] Detecting vulnerabilities...	os_version="3.24" repository="3.24" pkg_num=16
+2026-10-09T11:47:19Z	INFO	Number of language-specific files	num=1
+2026-10-09T11:47:19Z	INFO	[gobinary] Detecting vulnerabilities...
+2026-10-09T11:47:19Z	WARN	Using severities from other vendors for some vulnerabilities. Read https://trivy.dev/docs/v0.75/guide/scanner/vulnerability#severity-selection for details.
 
 Report Summary
 
